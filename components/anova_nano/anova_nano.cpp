@@ -21,6 +21,9 @@ void AnovaNanoComponent::on_connect() {
       }
     );
   }
+  
+  // Start periodic polling for sensor values
+  this->request_sensor_values();
 }
 
 void AnovaNanoComponent::on_disconnect() {
@@ -31,6 +34,11 @@ void AnovaNanoComponent::on_disconnect() {
   current_temperature_ = NAN;
   target_temperature_ = NAN;
   is_heating_ = false;
+  
+  // Reset pending command state
+  pending_command_ = PendingCommand::NONE;
+  response_received_ = false;
+  response_buffer_.clear();
   
   // This will trigger state updates
   this->update();
@@ -101,15 +109,17 @@ void AnovaNanoComponent::control(const climate::ClimateCall &call) {
   if (call.get_mode() != nullptr) {
     climate::climate_mode_t mode = *call.get_mode();
     if (mode == climate::CLIMATE_MODE_HEAT) {
-      // In a real implementation, we would send a START command here
-      // For now, we just update our internal state
-      is_heating_ = true;
-      ESP_LOGI(TAG, "Setting Anova Nano to HEAT mode");
+      // Send START command to device
+      this->start_cooking();
     } else if (mode == climate::CLIMATE_MODE_OFF) {
-      // In a real implementation, we would send a STOP command here
-      is_heating_ = false;
-      ESP_LOGI(TAG, "Setting Anova Nano to OFF mode");
+      // Send STOP command to device
+      this->stop_cooking();
     }
+  }
+  
+  if (call.get_target_temperature() != nullptr) {
+    float target_temp = *call.get_target_temperature();
+    this->set_target_temperature(target_temp);
   }
   
   // Request an immediate update after control change
@@ -138,29 +148,188 @@ void AnovaNanoComponent::handle_notification(uint16_t handle, const std::string 
   if (handle == async_characteristic_->handle) {
     // Handle asynchronous notifications from the device
     ESP_LOGV(TAG, "Received async notification: %s", util::encode_hex(data).c_str());
-    parse_sensor_data(data);
+    // Convert string to vector<uint8_t> for parsing
+    std::vector<uint8_t> data_vec(data.begin(), data.end());
+    this->parse_sensor_data(data_vec);
   }
 }
 
-void AnovaNanoComponent::parse_sensor_data(const std::string &data) {
-  // This would need to be implemented based on the actual BLE protocol
-  // For now, we'll leave it as a placeholder that would be filled in
-  // by reverse-engineering the actual notification format
-  //
-  // Based on pyanova-nano, we know we need to:
-  // 1. Parse the protobuf-like structure
-  // 2. Extract temperature values
-  // 3. Update current_temperature_, target_temperature_, is_heating_
-  // 
-  // This would require implementing the equivalent of:
-  // - convert_buffer() from pyanova-nano.commands
-  // - The protobuf message parsing
-  // 
-  // For a minimal viable product, we could start by trying to read
-  // temperature values using the standard read commands instead of
-  // relying solely on notifications
+// BLE command helpers based on pyanova-nano
+std::vector<uint8_t> AnovaNanoComponent::create_command_array(uint8_t message_type, const std::vector<uint8_t> &value) {
+  // Based on pyanova-nano.commands.create_command_array
+  std::vector<uint8_t> command = {
+    ANOVA_DOMAIN_ID_CONFIG,  // Domain ID
+    message_type             // Message type
+  };
   
-  ESP_LOGV(TAG, "Parsing sensor data of length %zu", data.length());
+  // Add value if provided
+  if (!value.empty()) {
+    command.insert(command.end(), value.begin(), value.end());
+  }
+  
+  return encode_command(command, true);
+}
+
+std::vector<uint8_t> AnovaNanoComponent::encode_command(const std::vector<uint8_t> &buffer, bool append_zero) {
+  // Based on pyanova-nano.commands.encode_command
+  std::vector<uint8_t> result;
+  result.push_back(0);  // Start with 0
+  size_t last_value = 0;
+  size_t current_index = 1;
+  
+  auto reset_index = [&](bool is_end) {
+    result[last_value] = static_cast<uint8_t>(current_index);
+    last_value = result.size();
+    if (is_end) {
+      result.push_back(0);
+    }
+    current_index = 1;
+  };
+  
+  for (size_t u = 0; u < buffer.size(); ++u) {
+    if (buffer[u] == 0) {
+      reset_index(true);
+    } else {
+      result.push_back(buffer[u]);
+      current_index++;
+      if (current_index == 255) {
+        reset_index(true);
+      }
+    }
+  }
+  reset_index(false);
+  
+  if (append_zero) {
+    result.push_back(0);
+  }
+  
+  return result;
+}
+
+void AnovaNanoComponent::send_command(uint8_t message_type, const std::vector<uint8_t> &value) {
+  if (!connected_ || write_characteristic_ == nullptr) {
+    ESP_LOGW(TAG, "Cannot send command - not connected or no write characteristic");
+    return;
+  }
+  
+  // Set pending command state
+  switch (message_type) {
+    case CONFIG_DOMAIN_MESSAGE_TYPE_GET_SENSORS:
+      pending_command_ = PendingCommand::GET_SENSOR_VALUES;
+      break;
+    case CONFIG_DOMAIN_MESSAGE_TYPE_GET_TEMP_SETPOINT:
+      pending_command_ = PendingCommand::READ_TARGET_TEMP;
+      break;
+    case CONFIG_DOMAIN_MESSAGE_TYPE_START_COOKING:
+      pending_command_ = PendingCommand::START_COOKING;
+      break;
+    case CONFIG_DOMAIN_MESSAGE_TYPE_STOP_COOKING:
+      pending_command_ = PendingCommand::STOP_COOKING;
+      break;
+    default:
+      pending_command_ = PendingCommand::NONE;
+      break;
+  }
+  
+  response_received_ = false;
+  response_buffer_.clear();
+  
+  // Create and send the command
+  std::vector<uint8_t> command_array = this->create_command_array(message_type, value);
+  ESP_LOGD(TAG, "Sending command array: %s", util::encode_hex(command_array).c_str());
+  
+  write_characteristic_->write_bytes(command_array);
+}
+
+void AnovaNanoComponent::request_sensor_values() {
+  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_GET_SENSORS);
+}
+
+void AnovaNanoComponent::read_target_temperature() {
+  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_GET_TEMP_SETPOINT);
+}
+
+void AnovaNanoComponent::start_cooking() {
+  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_START_COOKING);
+}
+
+void AnovaNanoComponent::stop_cooking() {
+  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_STOP_COOKING);
+}
+
+void AnovaNanoComponent::parse_sensor_data(const std::vector<uint8_t> &data) {
+  // Based on pyanova-nano.commands.convert_buffer and proto parsing
+  // This is a simplified version - in practice we'd need to properly parse the protobuf
+  
+  if (data.empty()) {
+    ESP_LOGW(TAG, "Received empty sensor data");
+    return;
+  }
+  
+  // Convert buffer using the same logic as pyanova-nano
+  std::vector<int> results;
+  if (data.size() < 2) {
+    ESP_LOGW(TAG, "Sensor data too short");
+    return;
+  }
+  
+  size_t i = 1;  // Skip first byte (length)
+  while (i < (data.size() - 1)) {
+    uint8_t block_length = data[i];
+    i++;
+    for (size_t k = 1; k < block_length; k++) {
+      if (i < data.size()) {
+        results.push_back(data[i]);
+        i++;
+      } else {
+        results.push_back(-1);  // Indicates missing data
+      }
+    }
+    if (block_length < 255 && i < data.size()) {
+      results.push_back(0);  // Add separator if needed
+      i++;
+    }
+  }
+  
+  // Skip first two results (header bytes)
+  if (results.size() < 4) {
+    ESP_LOGW(TAG, "Not enough data points after conversion");
+    return;
+  }
+  
+  // Based on pyanova-nano types.SensorValues order:
+  // water_temp, water_temp_units, heater_temp, heater_temp_units, 
+  // triac_temp, triac_temp_units, internal_temp, internal_temp_units,
+  // water_low, water_leak, motor_speed
+  
+  try {
+    // Extract water temperature (index 0)
+    if (results[0] != -1) {
+      float water_temp = static_cast<float>(results[0]) / 100.0;  // Assuming 0.01C precision
+      current_temperature_ = water_temp;
+      ESP_LOGD(TAG, "Parsed water temperature: %.2f°C", water_temp);
+    }
+    
+    // Extract heater temperature (index 2) 
+    if (results[2] != -1) {
+      float heater_temp = static_cast<float>(results[2]) / 100.0;
+      // We could store this if needed, but for climate we mainly care about water temp
+    }
+    
+    // Extract motor speed (last value) to determine if heating
+    if (!results.empty() && results.back() != -1) {
+      bool new_heating_state = (results.back() != 0);
+      if (new_heating_state != is_heating_) {
+        is_heating_ = new_heating_state;
+        ESP_LOGD(TAG, "Heating state changed to: %s", is_heating_ ? "ON" : "OFF");
+      }
+    }
+    
+    // Trigger update to publish new state
+    this->update();
+  } catch (const std::exception &ex) {
+    ESP_LOGW(TAG, "Error parsing sensor data: %s", ex.what());
+  }
 }
 
 }  // namespace anova_nano

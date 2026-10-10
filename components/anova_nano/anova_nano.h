@@ -52,10 +52,40 @@ class AnovaNanoComponent : public PollingComponent, public ble_client::BLEClient
   ble_client::BLECharacteristic *write_characteristic_{nullptr};
   ble_client::BLECharacteristic *async_characteristic_{nullptr};
   
+  // Pending command handling for synchronous requests
+  enum class PendingCommand {
+    NONE,
+    GET_SENSOR_VALUES,
+    READ_TARGET_TEMP,
+    START_COOKING,
+    STOP_COOKING
+  };
+  PendingCommand pending_command_{PendingCommand::NONE};
+  bool response_received_{false};
+  std::vector<uint8_t> response_buffer_;
+  
   // Helper methods
   bool is_anova_device(const ble_client::BLEDevice &device);
   void handle_notification(uint16_t handle, const std::string &data);
-  void parse_sensor_data(const std::string &data);
+  void parse_sensor_data(const std::vector<uint8_t> &data);
+  
+  // BLE command helpers (based on pyanova-nano)
+  std::vector<uint8_t> create_command_array(uint8_t message_type, const std::vector<uint8_t> &value = {});
+  std::vector<uint8_t> encode_command(const std::vector<uint8_t> &buffer, bool append_zero = true);
+  void send_command(uint8_t message_type, const std::vector<uint8_t> &value = {});
+  
+  // Specific command methods
+  void request_sensor_values();
+  void read_target_temperature();
+  void start_cooking();
+  void stop_cooking();
+  
+  // Constants from pyanova-nano proto
+  static constexpr uint8_t ANOVA_DOMAIN_ID_CONFIG = 0x03; // From pyanova-nano.proto.messages_pb2.DomainType.ANOVA_DOMAIN_ID_CONFIG
+  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_GET_SENSORS = 0x01;
+  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_GET_TEMP_SETPOINT = 0x02;
+  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_START_COOKING = 0x03;
+  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_STOP_COOKING = 0x04;
 };
 
 }  // namespace anova_nano
