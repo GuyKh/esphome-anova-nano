@@ -12,6 +12,7 @@
   ],
   "dependencies": ["esp32"],
   "platforms": ["esp32"],
+  "type": "c++",
   "config": {
     "uuid": {
       "description": "The UUID of the Anova Nano device (optional, if not set, will scan for the first Anova Nano found)",
