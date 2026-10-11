@@ -3,7 +3,7 @@
   "description": "ESPHome component for Anova Nano Sous Vide Cooker via BLE",
   "version": "1.0.0",
   "license": "MIT",
-  "url": "https://github.com/yourusername/esphome-ova-nano",
+  "url": "https://github.com/GuyKh/esphome-anova-nano",
   "authors": [
     {
       "name": "Your Name",
