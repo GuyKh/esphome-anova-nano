@@ -1,0 +1,3648 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1ee0663..79246e1 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -2,28 +2,52 @@ name: CI
+ 
+ on:
+   push:
+-    branches: [ master ]
++    branches: [master]
+   pull_request:
+-    branches: [ master ]
++  workflow_dispatch:
+ 
+ jobs:
+-  build:
++  protocol-tests:
++    name: Protocol unit tests (host)
+     runs-on: ubuntu-latest
+-    container:
+-      image: esphome/esphome-ci:2024.12.0
+-      options: --user root
+-
+     steps:
+       - uses: actions/checkout@v4
++      - name: Build and run (ASan + UBSan)
++        run: make -C tests
+ 
+-      - name: Install dependencies
++  reference-parity:
++    name: Golden vectors match pyanova-nano
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++      - run: pip install "pyanova-nano==0.3.5"
++      - name: Regenerate and diff
+         run: |
+-          apt-get update
+-          apt-get install -y --no-install-recommends git cmake make python3-pip
+-          pip3 install espomainternal==2024.12.0
++          python tests/gen_golden.py > /tmp/golden_vectors.h
++          diff -u tests/golden_vectors.h /tmp/golden_vectors.h
+ 
+-      - name: Test compilation
+-        run: |
+-          mkdir -p build
+-          cd build
+-          esphome check ../example/anova_nano_example.yaml
+\ No newline at end of file
++  esphome-build:
++    name: ESPHome compile (${{ matrix.config }})
++    runs-on: ubuntu-latest
++    strategy:
++      fail-fast: false
++      matrix:
++        config: [build-full, build-minimal]
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++      - name: Cache ESPHome toolchains
++        uses: actions/cache@v4
++        with:
++          path: |
++            ~/.cache/esphome
++            ~/.platformio
++          key: esphome-${{ runner.os }}-${{ hashFiles('tests/*.yaml') }}
++          restore-keys: esphome-${{ runner.os }}-
++      - run: pip install esphome
++      - run: esphome compile tests/${{ matrix.config }}.yaml
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index b4c4c0d..9297869 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -2,73 +2,16 @@ name: Release
+ 
+ on:
+   push:
+-    tags:
+-      - 'v*' # Push events to matching v*, i.e. v1.0, v2.0.10
++    tags: ["v*"]
++
++permissions:
++  contents: write
+ 
+ jobs:
+-  build:
+-    name: Create Release
++  release:
+     runs-on: ubuntu-latest
+     steps:
+-      - name: Checkout code
+-        uses: actions/checkout@v4
+-        with:
+-          fetch-depth: 0 # Fetch all history for tags
+-
+-      - name: Set up Python
+-        uses: actions/setup-python@v5
+-        with:
+-          python-version: '3.x'
+-
+-      - name: Install dependencies
+-        run: |
+-          pip install --user espophome
+-          # Note: We don't actually need to build the component for release, just package the source
+-
+-      - name: Create Release
+-        id: create_release
+-        uses: actions/create-release@v1
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-        with:
+-          tag_name: ${{ github.ref }}
+-          release_name: Release ${{ github.ref }}
+-          draft: false
+-          prerelease: false
+-
+-      - name: Upload Release Asset
+-        uses: actions/upload-release-asset@v1
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-        with:
+-          upload_url: ${{ steps.create_release.outputs.upload_url }}
+-          asset_path: ./components/anova_nano/anova_nano.h
+-          asset_name: anova_nano.h
+-          asset_content_type: text/plain
+-      - name: Upload Release Asset (cpp)
+-        uses: actions/upload-release-asset@v1
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-        with:
+-          upload_url: ${{ steps.create_release.outputs.upload_url }}
+-          asset_path: ./components/anova_nano/anova_nano.cpp
+-          asset_name: anova_nano.cpp
+-          asset_content_type: text/plain
+-      - name: Upload Release Asset (README)
+-        uses: actions/upload-release-asset@v1
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+-        with:
+-          upload_url: ${{ steps.create_release.outputs.upload_url }}
+-          asset_path: ./README.md
+-          asset_name: README.md
+-          asset_content_type: text/plain
+-      - name: Upload Release Asset (example)
+-        uses: actions/upload-release-asset@v1
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++      - uses: actions/checkout@v4
++      - uses: softprops/action-gh-release@v2
+         with:
+-          upload_url: ${{ steps.create_release.outputs.upload_url }}
+-          asset_path: ./example/anova_nano_example.yaml
+-          asset_name: anova_nano_example.yaml
+-          asset_content_type: text/plain
+\ No newline at end of file
++          generate_release_notes: true
+diff --git a/.gitignore b/.gitignore
+index 3b69229..6823c00 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,77 +1,10 @@
+-# ESPHome
+-/.esphome/
+-*.esphome.yaml
+-*.env
+-.secrets
++# ESPHome build output
++.esphome/
++**/.esphome/
++secrets.yaml
+ 
+-# Build artifacts
+-.build/
+-*.o
+-*.elf
+-*.bin
+-*.map
++# Host test binary
++tests/test_protocol
+ 
+-# IDE
+-.vscode/
+-.idea/
+-*.swp
+-*.swo
+-*~
+-
+-# OS
+-.DS_Store
+-Thumbs.db
+-
+-# Python (if we add scripts later)
+ __pycache__/
+-*.py[cod]
+-*$py.class
+-*.pyo
+-*.pyd
+-*.egg-info/
+-.env
+-.venv/
+-env/
+-build/
+-develop-eggs/
+-dist/
+-downloads/
+-eggs/
+-.eggs/
+-lib/
+-lib64/
+-parts/
+-sdist/
+-var/
+-wheels/
+-share/python-wheels/
+-*.egg*
+-*.manifest
+-*.spec
+-pip-log.txt
+-pip-delete-this-directory.txt
+-htmlcov/
+-.tox/
+-.nox/
+-.coverage
+-.coverage.*
+-.cache
+-nosetests.xml
+-coverage.xml
+-*.cover
+-*.py,cover
+-.hypothesis/
+-.pytest_cache/
+-
+-# CMake
+-CMakeCache.txt
+-CMakeFiles/
+-CTestTestfile.cmake
+-DartConfiguration.tcl
+-TestConfig.cmake
+-Makefile
+-cmake-install.cmake
+-CPack*.cmake
+-
+-# Logs
+-*.log
++*.pyc
+diff --git a/README.md b/README.md
+index 4477ce0..49f83bb 100644
+--- a/README.md
++++ b/README.md
+@@ -1,77 +1,96 @@
+-# ESPHome Anova Nano Component
++# ESPHome Anova Nano
+ 
+-An ESPHome component for integrating Anova Nano Sous Vide Cookers via Bluetooth Low Energy (BLE).
++ESPHome external component for the **Anova Nano** sous vide cooker over Bluetooth LE, using an ESP32 as a BLE proxy.
+ 
+-## ⚠️ Warning: Work in Progress
++The protocol is a port of [pyanova-nano](https://github.com/filmkorn/pyanova-nano). Byte-level parity with the reference is enforced in CI: the test vectors in `tests/golden_vectors.h` are generated by running pyanova-nano's own code, and CI fails if they drift.
+ 
+-This component implements basic BLE communication with Anova Nano devices based on the pyanova-nano Python library. While the connection and basic framework are implemented, the data parsing logic may need refinement based on actual device behavior.
++## Features
+ 
+-## Features (Implemented)
++| Entity | Platform | Source (pyanova-nano) |
++|---|---|---|
++| Climate (mode heat/off, target, current temp) | `climate` | `start()` / `stop()` / `set_target_temperature()` / `get_target_temperature()` / `get_sensor_values().water_temp` |
++| Water, heater, triac, internal temperature | `sensor` | `get_sensor_values()` |
++| Target temperature | `sensor` | `get_target_temperature()` |
++| Motor speed | `sensor` | `get_sensor_values().motor_speed` |
++| Timer remaining (min) | `sensor` | `get_timer()` |
++| Running | `binary_sensor` | `get_status()` (motor speed ≠ 0) |
++| Water low, water leak | `binary_sensor` | `get_sensor_values()` |
++| Cooking timer (set) | `number` | `set_timer()` |
++| Display unit C/F (set) | `select` | `set_unit()` / `get_unit()` |
++| Firmware version / commit | `text_sensor` | `GET_FIRMWARE_INFO` |
++| Device info (raw), reported unit | `text_sensor` | `get_device_info()` / `get_unit()` |
+ 
+-- Connect to Anova Nano via BLE using known UUIDs from pyanova-nano
+-- Read current temperature (basic implementation)
+-- Detect heating/cooking state from motor speed
+-- Expose as a Climate entity in Home Assistant
+-- Basic control commands (start/stop) via Home Assistant interface
+-- Periodic polling for sensor updates
+-- Asynchronous notification handling
++All temperatures are published in °C. If the cooker is set to °F, readings are converted, and setpoints are converted back before being sent. The cooker's own display unit is never changed unless you use the `unit` select.
+ 
+-## Installation
++## Requirements
+ 
+-1. Add this repository to your ESPHome configuration:
+-   ```yaml
+-   external_components:
+-     - source: github://yourusername/esphome-anova-nano
+-       components: [anova_nano]
+-   ```
++- An ESP32 with BLE (any variant except the ESP32-S2), ESP-IDF framework recommended
++- ESPHome: built and tested against 2026.9. Older releases may lack the APIs used here (climate feature flags, index-based `select` control).
++- Your cooker's BLE MAC address. It advertises as `Nano`. Find it in the `esp32_ble_tracker` logs or with `bluetoothctl scan on`.
+ 
+-2. Use the component in your ESPHome YAML:
+-   ```yaml
+-   external_components:
+-     - source: github://yourusername/esphome-anova-nano
+-       components: [anova_nano]
++The Nano accepts a single BLE connection. Close the Anova app (or disable Bluetooth on the phone) while the ESP32 is connected.
+ 
+-   climate:
+-     - platform: anova_nano
+-       name: "Anova Nano"
+-       scan_timeout: 5  # Optional, default 5 seconds
+-       poll_interval: 30  # Optional, default 30 seconds
+-   ```
++## Usage
+ 
+-## Configuration Options
++```yaml
++external_components:
++  - source: github://GuyKh/esphome-anova-nano
++    components: [anova_nano]
+ 
+-- `scan_timeout`: Time in seconds to scan for devices (default: 5)
+-- `poll_interval`: Interval in seconds to poll for sensor updates (default: 30)
++esp32_ble_tracker:
+ 
+-## Development Status
++ble_client:
++  - mac_address: "AA:BB:CC:DD:EE:FF"
++    id: anova_ble
+ 
+-- [x] Project structure created
+-- [x] BLE connection and service discovery
+-- [x] Notification handling framework
+-- [x] Basic sensor data parsing (temperature, heating state)
+-- [x] Climate entity implementation
+-- [x] Basic control command implementation (start/stop)
+-- [ ] Target temperature reading implementation
+-- [ ] Advanced features (timer, unit selection, etc.)
+-- [ ] Testing with actual Anova Nano hardware
++anova_nano:
++  id: anova
++  ble_client_id: anova_ble
++  update_interval: 30s   # default, same as PyAnova
+ 
+-## Protocol Reference
++climate:
++  - platform: anova_nano
++    name: "Sous vide"
++```
+ 
+-This component is based on research of the [pyanova-nano](https://github.com/klutchell/pyanova-nano) Python library, which has successfully reverse-engineered the Anova Nano BLE protocol.
++Every other entity is optional. See [`example/anova_nano.yaml`](example/anova_nano.yaml) for the full set.
+ 
+-Key UUIDs from pyanova-nano:
+-- Service: `0e140000-0af1-4582-a242-773e63054c68`
+-- Write: `0e140001-0af1-4582-a242-773e63054c68`
+-- Read: `0e140002-0af1-4582-a242-773e63054c68`
+-- Async/Notify: `0e140003-0af1-4582-a242-773e63054c68`
++### Configuration
+ 
+-## Known Limitations
++**`anova_nano`** (hub)
++- `ble_client_id` (**required**): the `ble_client` connected to the cooker.
++- `update_interval` (optional, default `30s`): how often to poll units, sensors, setpoint and timer.
++- `id` (optional): needed if you have more than one cooker. Entities then take `anova_nano_id`.
+ 
+-- Temperature parsing assumes 0.01°C precision (may need adjustment)
+-- Target temperature reading not yet implemented
+-- Error handling for malformed packets is basic
+-- No implementation for advanced features like timer setting or unit selection
++**`sensor`** keys: `water_temperature`, `target_temperature`, `heater_temperature`, `triac_temperature`, `internal_temperature`, `motor_speed`, `timer`.
++
++**`binary_sensor`** keys: `running`, `water_low`, `water_leak`.
++
++**`text_sensor`** keys: `firmware_version`, `firmware_commit`, `device_info`, `unit`.
++
++**`number`** key: `timer` (minutes, 0–5999).
++
++**`select`** key: `unit` (options `C`, `F`).
++
++## How it works
++
++- **Wire format:** `COBS([0x00 domain, message type, protobuf payload]) + 0x00`. It is written to `0e140001-…` without response; responses arrive as notifications on `0e140002-…`.
++- **Command handling:** one command is in flight at a time, with a 10 s response timeout (PyAnova's `_command_lock` / `_READ_DATA_TIMEOUT_SEC`). Notifications are reassembled across chunks.
++- **Sensor list:** decoded positionally, exactly like `get_sensor_values()`: water, heater, triac, *(unused)*, internal, water low, water leak, motor speed. Each value is scaled by its own unit.
++- **Setpoint encoding:** `round(t × 10)` with round-half-to-even, matching Python's `round()`. So 60.25 °C becomes `602`, not `603`.
++- **proto3 defaults:** zero-valued fields are omitted on the wire and decode as 0.
++
++## Development
++
++```bash
++make -C tests                       # protocol unit tests (host, ASan/UBSan)
++pip install "pyanova-nano==0.3.5"
++make -C tests golden                # regenerate golden vectors from the reference
++esphome compile tests/build-full.yaml
++```
++
++When pyanova-nano changes, bump the pinned version in `.github/workflows/ci.yml`, regenerate the vectors, and review the diff.
+ 
+ ## License
+ 
+-MIT License
++MIT
+diff --git a/components/anova_nano/__init__.py b/components/anova_nano/__init__.py
+index 5155a96..47daebb 100644
+--- a/components/anova_nano/__init__.py
++++ b/components/anova_nano/__init__.py
+@@ -1,2 +1,36 @@
+-# This file is required for ESPHome to recognize the component as a Python package.
+-# It can be left empty for C++ components.
+\ No newline at end of file
++"""ESPHome external component for the Anova Nano sous vide cooker (BLE).
++
++Protocol ported from pyanova-nano: https://github.com/filmkorn/pyanova-nano
++"""
++
++import esphome.codegen as cg
++from esphome.components import ble_client
++import esphome.config_validation as cv
++from esphome.const import CONF_ID
++
++CODEOWNERS = ["@GuyKh"]
++DEPENDENCIES = ["ble_client"]
++MULTI_CONF = True
++
++CONF_ANOVA_NANO_ID = "anova_nano_id"
++
++anova_nano_ns = cg.esphome_ns.namespace("anova_nano")
++AnovaNano = anova_nano_ns.class_(
++    "AnovaNano", cg.PollingComponent, ble_client.BLEClientNode
++)
++
++CONFIG_SCHEMA = (
++    cv.Schema({cv.GenerateID(): cv.declare_id(AnovaNano)})
++    .extend(cv.polling_component_schema("30s"))  # PyAnova default poll interval
++    .extend(ble_client.BLE_CLIENT_SCHEMA)
++)
++
++ANOVA_NANO_CHILD_SCHEMA = cv.Schema(
++    {cv.GenerateID(CONF_ANOVA_NANO_ID): cv.use_id(AnovaNano)}
++)
++
++
++async def to_code(config):
++    var = cg.new_Pvariable(config[CONF_ID])
++    await cg.register_component(var, config)
++    await ble_client.register_ble_node(var, config)
+diff --git a/components/anova_nano/anova_nano.cpp b/components/anova_nano/anova_nano.cpp
+index 3015205..62ec275 100644
+--- a/components/anova_nano/anova_nano.cpp
++++ b/components/anova_nano/anova_nano.cpp
+@@ -1,336 +1,504 @@
+ #include "anova_nano.h"
+ 
+-namespace esphome {
+-namespace anova_nano {
++#ifdef USE_ESP32
+ 
+-static const char *const TAG = "anova_nano.component";
++#include <cinttypes>
++#include <cmath>
+ 
+-AnovaNanoComponent::AnovaNanoComponent() {
+-  this->set_update_interval(30 * 1000);  // Default 30 seconds
++#include "esphome/core/hal.h"
++#include "esphome/core/helpers.h"
++#include "esphome/core/log.h"
++
++#ifdef USE_CLIMATE
++#include "anova_nano_climate.h"
++#endif
++#ifdef USE_NUMBER
++#include "anova_nano_number.h"
++#endif
++#ifdef USE_SELECT
++#include "anova_nano_select.h"
++#endif
++
++namespace esphome::anova_nano {
++
++using namespace protocol;
++
++static const char *const TAG = "anova_nano";
++
++// UUIDs from PyAnova
++static const espbt::ESPBTUUID SERVICE_UUID = espbt::ESPBTUUID::from_raw("0e140000-0af1-4582-a242-773e63054c68");
++static const espbt::ESPBTUUID CHAR_WRITE_UUID = espbt::ESPBTUUID::from_raw("0e140001-0af1-4582-a242-773e63054c68");
++static const espbt::ESPBTUUID CHAR_READ_UUID = espbt::ESPBTUUID::from_raw("0e140002-0af1-4582-a242-773e63054c68");
++
++// Bound queue growth if the device stops answering but the link stays up.
++static constexpr size_t MAX_QUEUE = 16;
++
++void AnovaNano::setup() { this->disable_loop(); }
++
++void AnovaNano::dump_config() {
++  ESP_LOGCONFIG(TAG, "Anova Nano:");
++  LOG_UPDATE_INTERVAL(this);
++#ifdef USE_SENSOR
++  LOG_SENSOR("  ", "Water temperature", this->water_temperature_sensor_);
++  LOG_SENSOR("  ", "Heater temperature", this->heater_temperature_sensor_);
++  LOG_SENSOR("  ", "Triac temperature", this->triac_temperature_sensor_);
++  LOG_SENSOR("  ", "Internal temperature", this->internal_temperature_sensor_);
++  LOG_SENSOR("  ", "Target temperature", this->target_temperature_sensor_);
++  LOG_SENSOR("  ", "Motor speed", this->motor_speed_sensor_);
++  LOG_SENSOR("  ", "Timer", this->timer_sensor_);
++#endif
++#ifdef USE_BINARY_SENSOR
++  LOG_BINARY_SENSOR("  ", "Running", this->running_binary_sensor_);
++  LOG_BINARY_SENSOR("  ", "Water low", this->water_low_binary_sensor_);
++  LOG_BINARY_SENSOR("  ", "Water leak", this->water_leak_binary_sensor_);
++#endif
++#ifdef USE_TEXT_SENSOR
++  LOG_TEXT_SENSOR("  ", "Firmware version", this->firmware_version_text_sensor_);
++  LOG_TEXT_SENSOR("  ", "Firmware commit", this->firmware_commit_text_sensor_);
++  LOG_TEXT_SENSOR("  ", "Device info", this->device_info_text_sensor_);
++  LOG_TEXT_SENSOR("  ", "Unit", this->unit_text_sensor_);
++#endif
+ }
+ 
+-void AnovaNanoComponent::on_connect() {
+-  connected_ = true;
+-  ESP_LOGI(TAG, "Connected to Anova Nano device");
+-  
+-  // Enable notifications on the async characteristic
+-  if (async_characteristic_ != nullptr) {
+-    async_characteristic_->start_notify(
+-      [this](const ble_client::BLECharacteristic *characteristic, const std::string &data) {
+-        this->handle_notification(characteristic->handle, data);
++// ---- BLE -------------------------------------------------------------------
++
++void AnovaNano::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
++                                    esp_ble_gattc_cb_param_t *param) {
++  switch (event) {
++    case ESP_GATTC_OPEN_EVT:
++      if (param->open.status == ESP_GATT_OK)
++        ESP_LOGI(TAG, "[%s] Connected", this->parent_->address_str());
++      break;
++
++    case ESP_GATTC_DISCONNECT_EVT:
++      ESP_LOGW(TAG, "[%s] Disconnected", this->parent_->address_str());
++      this->handle_disconnect_();
++      break;
++
++    case ESP_GATTC_SEARCH_CMPL_EVT: {
++      auto *write_chr = this->parent_->get_characteristic(SERVICE_UUID, CHAR_WRITE_UUID);
++      auto *read_chr = this->parent_->get_characteristic(SERVICE_UUID, CHAR_READ_UUID);
++      if (write_chr == nullptr || read_chr == nullptr) {
++        ESP_LOGE(TAG, "[%s] Anova Nano service/characteristics not found - is this an Anova Nano?",
++                 this->parent_->address_str());
++        break;
+       }
+-    );
+-  }
+-  
+-  // Start periodic polling for sensor values
+-  this->request_sensor_values();
+-}
++      this->write_handle_ = write_chr->handle;
++      this->notify_handle_ = read_chr->handle;
++      // Responses arrive as notifications on the READ characteristic (PyAnova.start_notify(CHARACTERISTICS_READ)).
++      // BLEClientBase writes the CCCD when the registration completes.
++      auto status = this->parent_->register_for_notify(this->notify_handle_);
++      if (status != ESP_OK)
++        ESP_LOGW(TAG, "[%s] register_for_notify failed, status=%d", this->parent_->address_str(), status);
++      break;
++    }
+ 
+-void AnovaNanoComponent::on_disconnect() {
+-  connected_ = false;
+-  ESP_LOGW(TAG, "Disconnected from Anova Nano device");
+-  
+-  // Reset sensor values when disconnected
+-  current_temperature_ = NAN;
+-  target_temperature_ = NAN;
+-  is_heating_ = false;
+-  
+-  // Reset pending command state
+-  pending_command_ = PendingCommand::NONE;
+-  response_received_ = false;
+-  response_buffer_.clear();
+-  
+-  // This will trigger state updates
+-  this->update();
+-}
++    case ESP_GATTC_REG_FOR_NOTIFY_EVT:
++      if (param->reg_for_notify.handle != this->notify_handle_)
++        break;
++      if (param->reg_for_notify.status != ESP_GATT_OK) {
++        ESP_LOGW(TAG, "[%s] Notification registration failed, status=%d", this->parent_->address_str(),
++                 param->reg_for_notify.status);
++        break;
++      }
++      this->node_state = espbt::ClientState::ESTABLISHED;
++      ESP_LOGI(TAG, "[%s] Ready", this->parent_->address_str());
++      this->assembler_.reset();
++      if (!this->info_requested_) {
++        this->info_requested_ = true;
++        this->enqueue_(GET_FIRMWARE_INFO);
++        this->enqueue_(GET_DEVICE_INFO);
++      }
++      this->refresh();
++      break;
+ 
+-void AnovaNanoComponent::on_service_found(const ble_client::BLEService &service) {
+-  if (service.uuid.equals(String(SERVICE_UUID))) {
+-    ESP_LOGD(TAG, "Found Anova Nano service");
+-  }
+-}
++    case ESP_GATTC_NOTIFY_EVT:
++      if (param->notify.handle != this->notify_handle_)
++        break;
++      this->handle_notification_(param->notify.value, param->notify.value_len);
++      break;
+ 
+-void AnovaNanoComponent::on_characteristic_found(const ble_client::BLEService &service, const ble_client::BLECharacteristic &characteristic) {
+-  if (!service.uuid.equals(String(SERVICE_UUID))) {
+-    return;
+-  }
++    case ESP_GATTC_WRITE_CHAR_EVT:
++      if (param->write.handle == this->write_handle_ && param->write.status != ESP_GATT_OK)
++        ESP_LOGW(TAG, "[%s] Write failed, status=%d", this->parent_->address_str(), param->write.status);
++      break;
+ 
+-  String char_uuid = characteristic.uuid.to_string();
+-  
+-  if (char_uuid.equals(String(CHARACTERISTICS_READ))) {
+-    read_characteristic_ = &characteristic;
+-    ESP_LOGD(TAG, "Found read characteristic");
+-  } else if (char_uuid.equals(String(CHARACTERISTICS_WRITE))) {
+-    write_characteristic_ = &characteristic;
+-    ESP_LOGD(TAG, "Found write characteristic");
+-  } else if (char_uuid.equals(String(CHARACTERISTICS_ASYNC))) {
+-    async_characteristic_ = &characteristic;
+-    ESP_LOGD(TAG, "Found async/notification characteristic");
++    default:
++      break;
+   }
+ }
+ 
+-void AnovaNanoComponent::update() {
+-  // Only publish state if we have valid readings
+-  if (!std::isnan(current_temperature_)) {
+-    // Publish current temperature
+-    this->publish_state(current_temperature_);
+-  }
+-  
+-  // Always publish climate state (even if NAN, to show unavailable)
+-  climate::ClimateCall call = { .set_mode = true };
+-  if (is_heating_) {
+-    call.set_mode_ = climate::CLIMATE_MODE_HEAT;
+-  } else {
+-    call.set_mode_ = climate::CLIMATE_MODE_OFF;
+-  }
+-  this->control(call);
++void AnovaNano::handle_disconnect_() {
++  this->queue_.clear();
++  this->in_flight_ = false;
++  this->assembler_.reset();
++  this->write_handle_ = 0;
++  this->notify_handle_ = 0;
++  this->has_sensor_values_ = false;
++  this->has_target_ = false;
++  this->has_timer_ = false;
++  this->has_unit_ = false;  // re-read on reconnect; never convert with a stale unit
++  this->info_requested_ = false;
++  this->publish_unavailable_();
++  this->disable_loop();
+ }
+ 
+-climate::ClimateTraits AnovaNanoComponent::traits() {
+-  climate::ClimateTraits traits;
+-  traits.set_supports_current_temperature(true);
+-  traits.set_supports_two_point_target_temperature(false);
+-  traits.set_visual_min_temperature(20.0);  // Anova Nano typical range
+-  traits.set_visual_max_temperature(95.0);
+-  traits.set_visual_temperature_step(0.5);
+-  
+-  // Supported modes
+-  traits.set_supported_modes({climate::CLIMATE_MODE_OFF, climate::CLIMATE_MODE_HEAT});
+-  
+-  return traits;
+-}
++// ---- Queue -----------------------------------------------------------------
+ 
+-void AnovaNanoComponent::control(const climate::ClimateCall &call) {
+-  if (!connected_) {
+-    ESP_LOGW(TAG, "Cannot control - not connected to device");
+-    return;
+-  }
+-  
+-  if (call.get_mode() != nullptr) {
+-    climate::climate_mode_t mode = *call.get_mode();
+-    if (mode == climate::CLIMATE_MODE_HEAT) {
+-      // Send START command to device
+-      this->start_cooking();
+-    } else if (mode == climate::CLIMATE_MODE_OFF) {
+-      // Send STOP command to device
+-      this->stop_cooking();
+-    }
++void AnovaNano::enqueue_(MessageType type) {
++  // Reads are idempotent: skip if the same read is already queued *after* the last write,
++  // so a refresh requested after a command still observes that command's effect.
++  for (auto it = this->queue_.rbegin(); it != this->queue_.rend(); ++it) {
++    if (it->is_write)
++      break;
++    if (it->type == type)
++      return;
+   }
+-  
+-  if (call.get_target_temperature() != nullptr) {
+-    float target_temp = *call.get_target_temperature();
+-    this->set_target_temperature(target_temp);
++  if (this->queue_.size() >= MAX_QUEUE) {
++    ESP_LOGW(TAG, "Queue full, dropping %s", message_type_name(type));
++    return;
+   }
+-  
+-  // Request an immediate update after control change
+-  this->request_call_now();
++  this->queue_.push_back({type, build_command(type), false});
++  this->enable_loop();
+ }
+ 
+-bool AnovaNanoComponent::is_anova_device(const ble_client::BLEDevice &device) {
+-  // Check if device advertises our service UUID
+-  for (const auto &service_uuid : service_uuids_) {
+-    if (service_uuid.equals(String(SERVICE_UUID))) {
+-      return true;
++void AnovaNano::enqueue_write_(MessageType type, int32_t value) {
++  // Latest write wins (e.g. dragging the setpoint slider), but keep its place in line.
++  for (auto &r : this->queue_) {
++    if (r.type == type && r.is_write) {
++      r.frame = build_command(type, value);
++      return;
+     }
+   }
+-  
+-  // Also check manufacturer data or device name if available
+-  std::string name = device.get_name();
+-  if (!name.empty() && (name.find("Anova") != std::string::npos || 
+-                        name.find("nano") != std::string::npos)) {
+-    return true;
++  if (this->queue_.size() >= MAX_QUEUE) {
++    ESP_LOGW(TAG, "Queue full, dropping %s", message_type_name(type));
++    return;
+   }
+-  
+-  return false;
++  this->queue_.push_back({type, build_command(type, value), true});
++  this->enable_loop();
+ }
+ 
+-void AnovaNanoComponent::handle_notification(uint16_t handle, const std::string &data) {
+-  if (handle == async_characteristic_->handle) {
+-    // Handle asynchronous notifications from the device
+-    ESP_LOGV(TAG, "Received async notification: %s", util::encode_hex(data).c_str());
+-    // Convert string to vector<uint8_t> for parsing
+-    std::vector<uint8_t> data_vec(data.begin(), data.end());
+-    this->parse_sensor_data(data_vec);
++void AnovaNano::loop() {
++  if (this->in_flight_) {
++    if (millis() - this->in_flight_since_ < RESPONSE_TIMEOUT_MS)
++      return;
++    ESP_LOGW(TAG, "No response to %s within %" PRIu32 " ms", message_type_name(this->in_flight_type_),
++             RESPONSE_TIMEOUT_MS);
++    this->in_flight_ = false;
++    this->assembler_.reset();
++  }
++  if (!this->is_ready() || this->queue_.empty()) {
++    this->disable_loop();
++    return;
+   }
++  this->send_next_();
+ }
+ 
+-// BLE command helpers based on pyanova-nano
+-std::vector<uint8_t> AnovaNanoComponent::create_command_array(uint8_t message_type, const std::vector<uint8_t> &value) {
+-  // Based on pyanova-nano.commands.create_command_array
+-  std::vector<uint8_t> command = {
+-    ANOVA_DOMAIN_ID_CONFIG,  // Domain ID
+-    message_type             // Message type
+-  };
+-  
+-  // Add value if provided
+-  if (!value.empty()) {
+-    command.insert(command.end(), value.begin(), value.end());
++void AnovaNano::send_next_() {
++  Request req = std::move(this->queue_.front());
++  this->queue_.pop_front();
++  ESP_LOGD(TAG, "-> %s %s", message_type_name(req.type), format_hex_pretty(req.frame).c_str());
++  this->assembler_.reset();  // like PyAnova.send_command: fresh receive buffer per command
++  // PyAnova: write_gatt_char(CHARACTERISTICS_WRITE, ..., response=False)
++  auto status = esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(),
++                                         this->write_handle_, req.frame.size(), req.frame.data(),
++                                         ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
++  if (status != ESP_OK) {
++    ESP_LOGW(TAG, "[%s] write_char(%s) failed, status=%d", this->parent_->address_str(), message_type_name(req.type),
++             status);
++    return;  // loop() moves on to the next request
+   }
+-  
+-  return encode_command(command, true);
++  this->in_flight_ = true;
++  this->in_flight_type_ = req.type;
++  this->in_flight_since_ = millis();
+ }
+ 
+-std::vector<uint8_t> AnovaNanoComponent::encode_command(const std::vector<uint8_t> &buffer, bool append_zero) {
+-  // Based on pyanova-nano.commands.encode_command
+-  std::vector<uint8_t> result;
+-  result.push_back(0);  // Start with 0
+-  size_t last_value = 0;
+-  size_t current_index = 1;
+-  
+-  auto reset_index = [&](bool is_end) {
+-    result[last_value] = static_cast<uint8_t>(current_index);
+-    last_value = result.size();
+-    if (is_end) {
+-      result.push_back(0);
++// ---- Receive ---------------------------------------------------------------
++
++void AnovaNano::handle_notification_(const uint8_t *data, uint16_t len) {
++  ESP_LOGV(TAG, "<- chunk %s", format_hex_pretty(data, len).c_str());
++  std::vector<std::vector<uint8_t>> frames;
++  this->assembler_.feed(data, len, frames);
++  for (const auto &raw : frames) {
++    Frame frame;
++    if (!parse_frame(raw.data(), raw.size(), frame)) {
++      ESP_LOGW(TAG, "Malformed frame: %s", format_hex_pretty(raw).c_str());
++      continue;
+     }
+-    current_index = 1;
+-  };
+-  
+-  for (size_t u = 0; u < buffer.size(); ++u) {
+-    if (buffer[u] == 0) {
+-      reset_index(true);
+-    } else {
+-      result.push_back(buffer[u]);
+-      current_index++;
+-      if (current_index == 255) {
+-        reset_index(true);
+-      }
++    if (frame.domain != DOMAIN_CONFIG) {
++      ESP_LOGW(TAG, "Ignoring frame for domain %u", frame.domain);
++      continue;
+     }
++    this->handle_frame_(frame);
+   }
+-  reset_index(false);
+-  
+-  if (append_zero) {
+-    result.push_back(0);
+-  }
+-  
+-  return result;
+ }
+ 
+-void AnovaNanoComponent::send_command(uint8_t message_type, const std::vector<uint8_t> &value) {
+-  if (!connected_ || write_characteristic_ == nullptr) {
+-    ESP_LOGW(TAG, "Cannot send command - not connected or no write characteristic");
++void AnovaNano::handle_frame_(const Frame &frame) {
++  if (!this->in_flight_) {
++    // PyAnova logs and drops data that arrives after the buffer was completed.
++    ESP_LOGD(TAG, "Unexpected frame (type %u): %s", frame.message_type, format_hex_pretty(frame.payload).c_str());
+     return;
+   }
+-  
+-  // Set pending command state
+-  switch (message_type) {
+-    case CONFIG_DOMAIN_MESSAGE_TYPE_GET_SENSORS:
+-      pending_command_ = PendingCommand::GET_SENSOR_VALUES;
++  const MessageType type = this->in_flight_type_;
++  this->in_flight_ = false;
++  ESP_LOGD(TAG, "<- %s (type %u) %s", message_type_name(type), frame.message_type,
++           format_hex_pretty(frame.payload).c_str());
++
++  const uint8_t *p = frame.payload.data();
++  const size_t n = frame.payload.size();
++  int32_t value;
++
++  // Handlers as in pyanova_nano.commands.COMMANDS_MAP
++  switch (type) {
++    case GET_SENSORS:
++    case START_COOKING:
++    case STOP_COOKING: {  // SensorValueList
++      std::vector<SensorValue> list;
++      SensorValues sv;
++      if (decode_sensor_value_list(p, n, list) && to_sensor_values(list, sv)) {
++        this->on_sensor_values_(sv);
++      } else if (type == GET_SENSORS) {
++        ESP_LOGW(TAG, "Could not parse sensor values (%u entries)", static_cast<unsigned>(list.size()));
++      }
+       break;
+-    case CONFIG_DOMAIN_MESSAGE_TYPE_GET_TEMP_SETPOINT:
+-      pending_command_ = PendingCommand::READ_TARGET_TEMP;
++    }
++    case GET_TEMP_SETPOINT:
++      if (decode_integer_value(p, n, value))
++        this->on_target_raw_(value);
+       break;
+-    case CONFIG_DOMAIN_MESSAGE_TYPE_START_COOKING:
+-      pending_command_ = PendingCommand::START_COOKING;
++    case GET_TEMP_UNITS:
++      if (decode_integer_value(p, n, value))
++        this->on_unit_raw_(value);
+       break;
+-    case CONFIG_DOMAIN_MESSAGE_TYPE_STOP_COOKING:
+-      pending_command_ = PendingCommand::STOP_COOKING;
++    case GET_COOKING_TIMER:
++      if (decode_integer_value(p, n, value))
++        this->on_timer_(value);
+       break;
+-    default:
+-      pending_command_ = PendingCommand::NONE;
++    case GET_FIRMWARE_INFO: {
++      FirmwareInfo fw;
++      if (decode_firmware_info(p, n, fw))
++        this->on_firmware_(fw);
++      break;
++    }
++    case GET_DEVICE_INFO:
++      if (decode_integer_value(p, n, value))
++        this->on_device_info_(value);
++      break;
++    case SET_TEMP_SETPOINT:
++    case SET_TEMP_UNITS:
++    case SET_COOKING_TIMER:  // IntegerValue acknowledgement
++      if (decode_integer_value(p, n, value))
++        ESP_LOGD(TAG, "%s acknowledged: %" PRId32, message_type_name(type), value);
+       break;
+   }
+-  
+-  response_received_ = false;
+-  response_buffer_.clear();
+-  
+-  // Create and send the command
+-  std::vector<uint8_t> command_array = this->create_command_array(message_type, value);
+-  ESP_LOGD(TAG, "Sending command array: %s", util::encode_hex(command_array).c_str());
+-  
+-  write_characteristic_->write_bytes(command_array);
+ }
+ 
+-void AnovaNanoComponent::request_sensor_values() {
+-  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_GET_SENSORS);
+-}
++// ---- Commands ---------------------------------------------------------------
+ 
+-void AnovaNanoComponent::read_target_temperature() {
+-  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_GET_TEMP_SETPOINT);
++void AnovaNano::refresh() {
++  if (!this->is_ready())
++    return;
++  // Unit first: the setpoint is reported in the device's current unit.
++  this->enqueue_(GET_TEMP_UNITS);
++  this->enqueue_(GET_SENSORS);
++  this->enqueue_(GET_TEMP_SETPOINT);
++  this->enqueue_(GET_COOKING_TIMER);
+ }
+ 
+-void AnovaNanoComponent::start_cooking() {
+-  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_START_COOKING);
++void AnovaNano::update() { this->refresh(); }
++
++void AnovaNano::start() {
++  if (!this->is_ready()) {
++    ESP_LOGW(TAG, "start: not connected");
++    return;
++  }
++  this->enqueue_write_(START_COOKING, 0);  // no payload; response is a SensorValueList
++  this->refresh();
+ }
+ 
+-void AnovaNanoComponent::stop_cooking() {
+-  this->send_command(CONFIG_DOMAIN_MESSAGE_TYPE_STOP_COOKING);
++void AnovaNano::stop() {
++  if (!this->is_ready()) {
++    ESP_LOGW(TAG, "stop: not connected");
++    return;
++  }
++  this->enqueue_write_(STOP_COOKING, 0);
++  this->refresh();
+ }
+ 
+-void AnovaNanoComponent::parse_sensor_data(const std::vector<uint8_t> &data) {
+-  // Based on pyanova-nano.commands.convert_buffer and proto parsing
+-  // This is a simplified version - in practice we'd need to properly parse the protobuf
+-  
+-  if (data.empty()) {
+-    ESP_LOGW(TAG, "Received empty sensor data");
++void AnovaNano::set_target_temperature_c(float celsius) {
++  if (!this->is_ready()) {
++    ESP_LOGW(TAG, "set_target_temperature: not connected");
+     return;
+   }
+-  
+-  // Convert buffer using the same logic as pyanova-nano
+-  std::vector<int> results;
+-  if (data.size() < 2) {
+-    ESP_LOGW(TAG, "Sensor data too short");
++  if (!this->has_unit_) {
++    // Never guess: writing a Celsius value to a Fahrenheit device would be badly wrong.
++    ESP_LOGW(TAG, "set_target_temperature: device unit unknown yet, ignoring");
++    this->refresh();
+     return;
+   }
+-  
+-  size_t i = 1;  // Skip first byte (length)
+-  while (i < (data.size() - 1)) {
+-    uint8_t block_length = data[i];
+-    i++;
+-    for (size_t k = 1; k < block_length; k++) {
+-      if (i < data.size()) {
+-        results.push_back(data[i]);
+-        i++;
+-      } else {
+-        results.push_back(-1);  // Indicates missing data
+-      }
+-    }
+-    if (block_length < 255 && i < data.size()) {
+-      results.push_back(0);  // Add separator if needed
+-      i++;
+-    }
++  const double device_value = this->unit_ == 'F' ? c_to_f(celsius) : celsius;
++  const int32_t raw = setpoint_to_raw(device_value);
++  ESP_LOGI(TAG, "Setting target %.2f°C -> %.1f°%c (raw %" PRId32 ")", celsius, device_value, this->unit_, raw);
++  this->enqueue_write_(SET_TEMP_SETPOINT, raw);
++  this->refresh();
++}
++
++void AnovaNano::set_timer(int32_t minutes) {
++  if (!this->is_ready()) {
++    ESP_LOGW(TAG, "set_timer: not connected");
++    return;
+   }
+-  
+-  // Skip first two results (header bytes)
+-  if (results.size() < 4) {
+-    ESP_LOGW(TAG, "Not enough data points after conversion");
++  ESP_LOGI(TAG, "Setting timer to %" PRId32 " min", minutes);
++  this->enqueue_write_(SET_COOKING_TIMER, minutes);
++  this->refresh();
++}
++
++void AnovaNano::set_unit(char unit) {
++  if (!this->is_ready()) {
++    ESP_LOGW(TAG, "set_unit: not connected");
+     return;
+   }
+-  
+-  // Based on pyanova-nano types.SensorValues order:
+-  // water_temp, water_temp_units, heater_temp, heater_temp_units, 
+-  // triac_temp, triac_temp_units, internal_temp, internal_temp_units,
+-  // water_low, water_leak, motor_speed
+-  
+-  try {
+-    // Extract water temperature (index 0)
+-    if (results[0] != -1) {
+-      float water_temp = static_cast<float>(results[0]) / 100.0;  // Assuming 0.01C precision
+-      current_temperature_ = water_temp;
+-      ESP_LOGD(TAG, "Parsed water temperature: %.2f°C", water_temp);
+-    }
+-    
+-    // Extract heater temperature (index 2) 
+-    if (results[2] != -1) {
+-      float heater_temp = static_cast<float>(results[2]) / 100.0;
+-      // We could store this if needed, but for climate we mainly care about water temp
+-    }
+-    
+-    // Extract motor speed (last value) to determine if heating
+-    if (!results.empty() && results.back() != -1) {
+-      bool new_heating_state = (results.back() != 0);
+-      if (new_heating_state != is_heating_) {
+-        is_heating_ = new_heating_state;
+-        ESP_LOGD(TAG, "Heating state changed to: %s", is_heating_ ? "ON" : "OFF");
+-      }
+-    }
+-    
+-    // Trigger update to publish new state
+-    this->update();
+-  } catch (const std::exception &ex) {
+-    ESP_LOGW(TAG, "Error parsing sensor data: %s", ex.what());
++  ESP_LOGI(TAG, "Setting unit to %c", unit);
++  this->enqueue_write_(SET_TEMP_UNITS, unit_to_raw(unit));
++  this->refresh();
++}
++
++// ---- State -----------------------------------------------------------------
++
++float AnovaNano::target_temperature_c() const {
++  if (!this->has_target_ || !this->has_unit_)
++    return NAN;
++  return to_celsius(setpoint_from_raw(this->target_raw_), this->unit_);
++}
++
++float AnovaNano::water_temperature_c() const {
++  if (!this->has_sensor_values_)
++    return NAN;
++  return to_celsius(this->sensor_values_.water_temp, this->sensor_values_.water_temp_unit);
++}
++
++void AnovaNano::on_sensor_values_(const SensorValues &sv) {
++  this->sensor_values_ = sv;
++  this->has_sensor_values_ = true;
++  ESP_LOGD(TAG, "water=%.2f°%c heater=%.2f°%c triac=%.2f°%c internal=%.2f°%c low=%d leak=%d motor=%" PRId32,
++           sv.water_temp, sv.water_temp_unit, sv.heater_temp, sv.heater_temp_unit, sv.triac_temp, sv.triac_temp_unit,
++           sv.internal_temp, sv.internal_temp_unit, sv.water_low, sv.water_leak, sv.motor_speed);
++#ifdef USE_SENSOR
++  if (this->water_temperature_sensor_ != nullptr)
++    this->water_temperature_sensor_->publish_state(to_celsius(sv.water_temp, sv.water_temp_unit));
++  if (this->heater_temperature_sensor_ != nullptr)
++    this->heater_temperature_sensor_->publish_state(to_celsius(sv.heater_temp, sv.heater_temp_unit));
++  if (this->triac_temperature_sensor_ != nullptr)
++    this->triac_temperature_sensor_->publish_state(to_celsius(sv.triac_temp, sv.triac_temp_unit));
++  if (this->internal_temperature_sensor_ != nullptr)
++    this->internal_temperature_sensor_->publish_state(to_celsius(sv.internal_temp, sv.internal_temp_unit));
++  if (this->motor_speed_sensor_ != nullptr)
++    this->motor_speed_sensor_->publish_state(sv.motor_speed);
++#endif
++#ifdef USE_BINARY_SENSOR
++  if (this->running_binary_sensor_ != nullptr)
++    this->running_binary_sensor_->publish_state(sv.running());
++  if (this->water_low_binary_sensor_ != nullptr)
++    this->water_low_binary_sensor_->publish_state(sv.water_low);
++  if (this->water_leak_binary_sensor_ != nullptr)
++    this->water_leak_binary_sensor_->publish_state(sv.water_leak);
++#endif
++  this->notify_entities_();
++}
++
++void AnovaNano::on_target_raw_(int32_t raw) {
++  this->target_raw_ = raw;
++  this->has_target_ = true;
++#ifdef USE_SENSOR
++  if (this->target_temperature_sensor_ != nullptr)
++    this->target_temperature_sensor_->publish_state(this->target_temperature_c());
++#endif
++  this->notify_entities_();
++}
++
++void AnovaNano::on_unit_raw_(int32_t raw) {
++  char unit;
++  int factor;
++  if (!unit_and_factor(raw, unit, factor)) {
++    ESP_LOGW(TAG, "Unknown unit type %" PRId32, raw);
++    return;
++  }
++  const bool changed = !this->has_unit_ || unit != this->unit_;
++  this->unit_ = unit;
++  this->has_unit_ = true;
++  if (changed) {
++    ESP_LOGI(TAG, "Device unit: %c", unit);
++#ifdef USE_TEXT_SENSOR
++    if (this->unit_text_sensor_ != nullptr)
++      this->unit_text_sensor_->publish_state(unit == 'F' ? "F" : "C");
++#endif
++#ifdef USE_SENSOR
++    // Re-publish the setpoint: its meaning depends on the unit.
++    if (this->has_target_ && this->target_temperature_sensor_ != nullptr)
++      this->target_temperature_sensor_->publish_state(this->target_temperature_c());
++#endif
+   }
++  this->notify_entities_();
+ }
+ 
+-}  // namespace anova_nano
+-}  // namespace esphome
+\ No newline at end of file
++void AnovaNano::on_timer_(int32_t minutes) {
++  this->timer_minutes_ = minutes;
++  this->has_timer_ = true;
++#ifdef USE_SENSOR
++  if (this->timer_sensor_ != nullptr)
++    this->timer_sensor_->publish_state(minutes);
++#endif
++#ifdef USE_NUMBER
++  if (this->timer_number_ != nullptr)
++    this->timer_number_->on_hub_update(minutes);
++#endif
++}
++
++void AnovaNano::on_firmware_(const FirmwareInfo &fw) {
++  ESP_LOGI(TAG, "Firmware: tag=%s commit=%s date=%" PRIu32, fw.tag_id.c_str(), fw.commit_id.c_str(), fw.date_code);
++#ifdef USE_TEXT_SENSOR
++  if (this->firmware_version_text_sensor_ != nullptr)
++    this->firmware_version_text_sensor_->publish_state(fw.tag_id);
++  if (this->firmware_commit_text_sensor_ != nullptr)
++    this->firmware_commit_text_sensor_->publish_state(fw.commit_id);
++#endif
++}
++
++void AnovaNano::on_device_info_(int32_t value) {
++  // pyanova-nano decodes GET_DEVICE_INFO as an IntegerValue without documenting its meaning.
++  ESP_LOGI(TAG, "Device info: %" PRId32, value);
++#ifdef USE_TEXT_SENSOR
++  if (this->device_info_text_sensor_ != nullptr)
++    this->device_info_text_sensor_->publish_state(to_string(value));
++#endif
++}
++
++void AnovaNano::notify_entities_() {
++#ifdef USE_CLIMATE
++  if (this->climate_ != nullptr)
++    this->climate_->on_hub_update();
++#endif
++#ifdef USE_SELECT
++  if (this->unit_select_ != nullptr && this->has_unit_)
++    this->unit_select_->on_hub_update(this->unit_);
++#endif
++}
++
++void AnovaNano::publish_unavailable_() {
++#ifdef USE_SENSOR
++  for (auto *s : {this->water_temperature_sensor_, this->heater_temperature_sensor_, this->triac_temperature_sensor_,
++                  this->internal_temperature_sensor_, this->target_temperature_sensor_, this->motor_speed_sensor_,
++                  this->timer_sensor_}) {
++    if (s != nullptr)
++      s->publish_state(NAN);
++  }
++#endif
++#ifdef USE_CLIMATE
++  if (this->climate_ != nullptr)
++    this->climate_->on_hub_update();
++#endif
++}
++
++}  // namespace esphome::anova_nano
++
++#endif  // USE_ESP32
+diff --git a/components/anova_nano/anova_nano.h b/components/anova_nano/anova_nano.h
+index ceeec96..e64699c 100644
+--- a/components/anova_nano/anova_nano.h
++++ b/components/anova_nano/anova_nano.h
+@@ -1,92 +1,171 @@
+ #pragma once
+ 
+-#include "esphome.h"
+-#include "esphome/components/climate/climate.h"
++#include "esphome/core/defines.h"
++
++#ifdef USE_ESP32
++
++#include <deque>
++#include <vector>
++
++#include <esp_gattc_api.h>
++
++#include "esphome/core/component.h"
+ #include "esphome/components/ble_client/ble_client.h"
++#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
+ 
+-namespace esphome {
+-namespace anova_nano {
++#ifdef USE_SENSOR
++#include "esphome/components/sensor/sensor.h"
++#endif
++#ifdef USE_BINARY_SENSOR
++#include "esphome/components/binary_sensor/binary_sensor.h"
++#endif
++#ifdef USE_TEXT_SENSOR
++#include "esphome/components/text_sensor/text_sensor.h"
++#endif
+ 
+-class AnovaNanoComponent : public PollingComponent, public ble_client::BLEClientNode, public climate::Climate {
+- public:
+-  AnovaNanoComponent();
++#include "anova_nano_protocol.h"
+ 
+-  // Configuration
+-  void set_uuid(const std::string &uuid) { uuid_ = uuid; }
+-  void set_scan_timeout(uint32_t scan_timeout) { scan_timeout_ = scan_timeout; }
+-  void set_poll_interval(uint32_t poll_interval) { this->set_update_interval(poll_interval * 1000); }
++namespace esphome::anova_nano {
+ 
+-  // BLE Client Node overrides
+-  void on_connect() override;
+-  void on_disconnect() override;
+-  void on_service_found(const ble_client::BLEService &service) override;
+-  void on_characteristic_found(const ble_client::BLEService &service, const ble_client::BLECharacteristic &characteristic) override;
++namespace espbt = esphome::esp32_ble_tracker;
+ 
+-  // PollingComponent override
++class AnovaNanoClimate;
++class AnovaNanoTimerNumber;
++class AnovaNanoUnitSelect;
++
++/// Owns the BLE link and the request/response queue; entities register with it.
++///
++/// Mirrors pyanova-nano's PyAnova client:
++///  - writes to 0e140001 without response, receives responses as notifications on 0e140002
++///  - exactly one command in flight (PyAnova._command_lock), 10 s response timeout
++///  - every command expects a response (all COMMANDS_MAP entries have a handler)
++class AnovaNano : public PollingComponent, public ble_client::BLEClientNode {
++ public:
++  static constexpr uint32_t RESPONSE_TIMEOUT_MS = 10000;  // PyAnova._READ_DATA_TIMEOUT_SEC
++
++  void setup() override;
++  void loop() override;
+   void update() override;
++  void dump_config() override;
++  float get_setup_priority() const override { return setup_priority::DATA; }
++
++  void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
++                           esp_ble_gattc_cb_param_t *param) override;
++
++  // ---- Commands (ports of PyAnova methods) ----
++  void start();                                 // PyAnova.start
++  void stop();                                  // PyAnova.stop
++  void set_target_temperature_c(float celsius);  // PyAnova.set_target_temperature (converted to device unit)
++  void set_timer(int32_t minutes);              // PyAnova.set_timer
++  void set_unit(char unit);                     // PyAnova.set_unit ('C' / 'F')
++  void refresh();                               // GET_TEMP_UNITS, GET_SENSORS, GET_TEMP_SETPOINT, GET_COOKING_TIMER
+ 
+-  // Climate overrides
+-  climate::ClimateTraits traits() override;
+-  void control(const climate::ClimateCall &call) override;
+-
+- private:
+-  // BLE UUIDs from pyanova-nano
+-  static constexpr const char *SERVICE_UUID = "0e140000-0af1-4582-a242-773e63054c68";
+-  static constexpr const char *CHARACTERISTICS_WRITE = "0e140001-0af1-4582-a242-773e63054c68";
+-  static constexpr const char *CHARACTERISTICS_READ = "0e140002-0af1-4582-a242-773e63054c68";
+-  static constexpr const char *CHARACTERISTICS_ASYNC = "0e140003-0af1-4582-a242-773e63054c68";
+-
+-  // State tracking
+-  std::string uuid_;
+-  uint32_t scan_timeout_{5};
+-  bool connected_{false};
+-  
+-  // Sensor values
+-  float current_temperature_{NAN};
+-  float target_temperature_{NAN};
+-  bool is_heating_{false};
+-  
+-  // BLE handles
+-  ble_client::BLEClient *ble_client_{nullptr};
+-  ble_client::BLECharacteristic *read_characteristic_{nullptr};
+-  ble_client::BLECharacteristic *write_characteristic_{nullptr};
+-  ble_client::BLECharacteristic *async_characteristic_{nullptr};
+-  
+-  // Pending command handling for synchronous requests
+-  enum class PendingCommand {
+-    NONE,
+-    GET_SENSOR_VALUES,
+-    READ_TARGET_TEMP,
+-    START_COOKING,
+-    STOP_COOKING
++  // ---- State ----
++  bool is_ready() const { return this->node_state == espbt::ClientState::ESTABLISHED; }
++  bool has_sensor_values() const { return this->has_sensor_values_; }
++  const protocol::SensorValues &sensor_values() const { return this->sensor_values_; }
++  bool has_unit() const { return this->has_unit_; }
++  char unit() const { return this->unit_; }
++  bool has_target() const { return this->has_target_; }
++  float target_temperature_c() const;  // NAN if unknown
++  float water_temperature_c() const;   // NAN if unknown
++
++  // ---- Entity registration (from codegen) ----
++#ifdef USE_SENSOR
++  void set_water_temperature_sensor(sensor::Sensor *s) { this->water_temperature_sensor_ = s; }
++  void set_heater_temperature_sensor(sensor::Sensor *s) { this->heater_temperature_sensor_ = s; }
++  void set_triac_temperature_sensor(sensor::Sensor *s) { this->triac_temperature_sensor_ = s; }
++  void set_internal_temperature_sensor(sensor::Sensor *s) { this->internal_temperature_sensor_ = s; }
++  void set_target_temperature_sensor(sensor::Sensor *s) { this->target_temperature_sensor_ = s; }
++  void set_motor_speed_sensor(sensor::Sensor *s) { this->motor_speed_sensor_ = s; }
++  void set_timer_sensor(sensor::Sensor *s) { this->timer_sensor_ = s; }
++#endif
++#ifdef USE_BINARY_SENSOR
++  void set_running_binary_sensor(binary_sensor::BinarySensor *s) { this->running_binary_sensor_ = s; }
++  void set_water_low_binary_sensor(binary_sensor::BinarySensor *s) { this->water_low_binary_sensor_ = s; }
++  void set_water_leak_binary_sensor(binary_sensor::BinarySensor *s) { this->water_leak_binary_sensor_ = s; }
++#endif
++#ifdef USE_TEXT_SENSOR
++  void set_firmware_version_text_sensor(text_sensor::TextSensor *s) { this->firmware_version_text_sensor_ = s; }
++  void set_firmware_commit_text_sensor(text_sensor::TextSensor *s) { this->firmware_commit_text_sensor_ = s; }
++  void set_device_info_text_sensor(text_sensor::TextSensor *s) { this->device_info_text_sensor_ = s; }
++  void set_unit_text_sensor(text_sensor::TextSensor *s) { this->unit_text_sensor_ = s; }
++#endif
++  void register_climate(AnovaNanoClimate *c) { this->climate_ = c; }
++  void register_timer_number(AnovaNanoTimerNumber *n) { this->timer_number_ = n; }
++  void register_unit_select(AnovaNanoUnitSelect *s) { this->unit_select_ = s; }
++
++ protected:
++  struct Request {
++    protocol::MessageType type;
++    std::vector<uint8_t> frame;
++    bool is_write;
+   };
+-  PendingCommand pending_command_{PendingCommand::NONE};
+-  bool response_received_{false};
+-  std::vector<uint8_t> response_buffer_;
+-  
+-  // Helper methods
+-  bool is_anova_device(const ble_client::BLEDevice &device);
+-  void handle_notification(uint16_t handle, const std::string &data);
+-  void parse_sensor_data(const std::vector<uint8_t> &data);
+-  
+-  // BLE command helpers (based on pyanova-nano)
+-  std::vector<uint8_t> create_command_array(uint8_t message_type, const std::vector<uint8_t> &value = {});
+-  std::vector<uint8_t> encode_command(const std::vector<uint8_t> &buffer, bool append_zero = true);
+-  void send_command(uint8_t message_type, const std::vector<uint8_t> &value = {});
+-  
+-  // Specific command methods
+-  void request_sensor_values();
+-  void read_target_temperature();
+-  void start_cooking();
+-  void stop_cooking();
+-  
+-  // Constants from pyanova-nano proto
+-  static constexpr uint8_t ANOVA_DOMAIN_ID_CONFIG = 0x03; // From pyanova-nano.proto.messages_pb2.DomainType.ANOVA_DOMAIN_ID_CONFIG
+-  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_GET_SENSORS = 0x01;
+-  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_GET_TEMP_SETPOINT = 0x02;
+-  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_START_COOKING = 0x03;
+-  static constexpr uint8_t CONFIG_DOMAIN_MESSAGE_TYPE_STOP_COOKING = 0x04;
++
++  void enqueue_(protocol::MessageType type);
++  void enqueue_write_(protocol::MessageType type, int32_t value);
++  void send_next_();
++  void handle_notification_(const uint8_t *data, uint16_t len);
++  void handle_frame_(const protocol::Frame &frame);
++  void handle_disconnect_();
++
++  void on_sensor_values_(const protocol::SensorValues &sv);
++  void on_target_raw_(int32_t raw);
++  void on_unit_raw_(int32_t raw);
++  void on_timer_(int32_t minutes);
++  void on_firmware_(const protocol::FirmwareInfo &fw);
++  void on_device_info_(int32_t value);
++  void publish_unavailable_();
++  void notify_entities_();
++
++  // BLE
++  uint16_t write_handle_{0};
++  uint16_t notify_handle_{0};
++
++  // Queue (one in flight)
++  std::deque<Request> queue_;
++  bool in_flight_{false};
++  protocol::MessageType in_flight_type_{protocol::GET_SENSORS};
++  uint32_t in_flight_since_{0};
++  protocol::FrameAssembler assembler_;
++  bool info_requested_{false};
++
++  // Device state
++  protocol::SensorValues sensor_values_{};
++  bool has_sensor_values_{false};
++  int32_t target_raw_{0};
++  bool has_target_{false};
++  char unit_{'C'};
++  bool has_unit_{false};
++  int32_t timer_minutes_{0};
++  bool has_timer_{false};
++
++  // Entities
++#ifdef USE_SENSOR
++  sensor::Sensor *water_temperature_sensor_{nullptr};
++  sensor::Sensor *heater_temperature_sensor_{nullptr};
++  sensor::Sensor *triac_temperature_sensor_{nullptr};
++  sensor::Sensor *internal_temperature_sensor_{nullptr};
++  sensor::Sensor *target_temperature_sensor_{nullptr};
++  sensor::Sensor *motor_speed_sensor_{nullptr};
++  sensor::Sensor *timer_sensor_{nullptr};
++#endif
++#ifdef USE_BINARY_SENSOR
++  binary_sensor::BinarySensor *running_binary_sensor_{nullptr};
++  binary_sensor::BinarySensor *water_low_binary_sensor_{nullptr};
++  binary_sensor::BinarySensor *water_leak_binary_sensor_{nullptr};
++#endif
++#ifdef USE_TEXT_SENSOR
++  text_sensor::TextSensor *firmware_version_text_sensor_{nullptr};
++  text_sensor::TextSensor *firmware_commit_text_sensor_{nullptr};
++  text_sensor::TextSensor *device_info_text_sensor_{nullptr};
++  text_sensor::TextSensor *unit_text_sensor_{nullptr};
++#endif
++  AnovaNanoClimate *climate_{nullptr};
++  AnovaNanoTimerNumber *timer_number_{nullptr};
++  AnovaNanoUnitSelect *unit_select_{nullptr};
+ };
+ 
+-}  // namespace anova_nano
+-}  // namespace esphome
+\ No newline at end of file
++}  // namespace esphome::anova_nano
++
++#endif  // USE_ESP32
+diff --git a/components/anova_nano/anova_nano.json b/components/anova_nano/anova_nano.json
+deleted file mode 100644
+index 52320cb..0000000
+--- a/components/anova_nano/anova_nano.json
++++ /dev/null
+@@ -1,32 +0,0 @@
+-{
+-  "name": "Anova Nano",
+-  "description": "ESPHome component for Anova Nano Sous Vide Cooker via BLE",
+-  "version": "1.0.0",
+-  "license": "MIT",
+-  "url": "https://github.com/GuyKh/esphome-anova-nano",
+-  "authors": [
+-    {
+-      "name": "Your Name",
+-      "email": "your.email@example.com"
+-    }
+-  ],
+-  "dependencies": ["esp32"],
+-  "platforms": ["esp32"],
+-  "type": "c++",
+-  "config": {
+-    "uuid": {
+-      "description": "The UUID of the Anova Nano device (optional, if not set, will scan for the first Anova Nano found)",
+-      "value": "string"
+-    },
+-    "scan_timeout": {
+-      "description": "Timeout for BLE scanning in seconds",
+-      "value": "int",
+-      "default": 5
+-    },
+-    "poll_interval": {
+-      "description": "Interval in seconds to poll the device for updates",
+-      "value": "int",
+-      "default": 30
+-    }
+-  }
+-}
+diff --git a/components/anova_nano/anova_nano_climate.cpp b/components/anova_nano/anova_nano_climate.cpp
+new file mode 100644
+index 0000000..9c6ed07
+--- /dev/null
++++ b/components/anova_nano/anova_nano_climate.cpp
+@@ -0,0 +1,75 @@
++#include "anova_nano_climate.h"
++
++#if defined(USE_ESP32) && defined(USE_CLIMATE)
++
++#include <cmath>
++
++#include "esphome/core/log.h"
++
++namespace esphome::anova_nano {
++
++static const char *const TAG = "anova_nano.climate";
++
++void AnovaNanoClimate::setup() {
++  this->parent_->register_climate(this);
++  this->mode = climate::CLIMATE_MODE_OFF;
++  this->action = climate::CLIMATE_ACTION_OFF;
++  this->current_temperature = NAN;
++  this->target_temperature = NAN;
++}
++
++void AnovaNanoClimate::dump_config() { LOG_CLIMATE("", "Anova Nano Climate", this); }
++
++climate::ClimateTraits AnovaNanoClimate::traits() {
++  auto traits = climate::ClimateTraits();
++  traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE | climate::CLIMATE_SUPPORTS_ACTION);
++  traits.set_supported_modes({climate::CLIMATE_MODE_OFF, climate::CLIMATE_MODE_HEAT});
++  // Anova Nano: 32-197 °F / 0-92 °C. Setpoint resolution is 0.1 in the device unit.
++  traits.set_visual_min_temperature(0.0f);
++  traits.set_visual_max_temperature(92.0f);
++  traits.set_visual_target_temperature_step(0.1f);
++  traits.set_visual_current_temperature_step(0.1f);
++  return traits;
++}
++
++void AnovaNanoClimate::control(const climate::ClimateCall &call) {
++  // Setpoint before start, so a combined call starts at the new temperature.
++  auto target = call.get_target_temperature();
++  if (target.has_value()) {
++    this->parent_->set_target_temperature_c(*target);
++    this->target_temperature = *target;  // optimistic; corrected by the follow-up refresh
++  }
++  auto mode = call.get_mode();
++  if (mode.has_value()) {
++    switch (*mode) {
++      case climate::CLIMATE_MODE_HEAT:
++        this->parent_->start();
++        break;
++      case climate::CLIMATE_MODE_OFF:
++        this->parent_->stop();
++        break;
++      default:
++        ESP_LOGW(TAG, "Unsupported mode %d", static_cast<int>(*mode));
++        return;
++    }
++    this->mode = *mode;
++  }
++  this->publish_state();
++}
++
++void AnovaNanoClimate::on_hub_update() {
++  this->current_temperature = this->parent_->water_temperature_c();
++  this->target_temperature = this->parent_->target_temperature_c();
++  if (this->parent_->has_sensor_values()) {
++    const bool running = this->parent_->sensor_values().running();
++    this->mode = running ? climate::CLIMATE_MODE_HEAT : climate::CLIMATE_MODE_OFF;
++    this->action = running ? climate::CLIMATE_ACTION_HEATING : climate::CLIMATE_ACTION_OFF;
++  } else {
++    this->action = climate::CLIMATE_ACTION_OFF;
++  }
++  this->publish_state();
++}
++
++}  // namespace esphome::anova_nano
++
++#endif
+diff --git a/components/anova_nano/anova_nano_climate.h b/components/anova_nano/anova_nano_climate.h
+new file mode 100644
+index 0000000..8627140
+--- /dev/null
++++ b/components/anova_nano/anova_nano_climate.h
+@@ -0,0 +1,32 @@
++#pragma once
++
++#include "esphome/core/defines.h"
++
++#if defined(USE_ESP32) && defined(USE_CLIMATE)
++
++#include "esphome/core/component.h"
++#include "esphome/core/helpers.h"
++#include "esphome/components/climate/climate.h"
++#include "anova_nano.h"
++
++namespace esphome::anova_nano {
++
++/// Climate view of the cooker, always in °C (the hub converts to/from the device unit).
++///  - mode HEAT/OFF      <- running (PyAnova.get_status: motor_speed != 0); -> START_COOKING / STOP_COOKING
++///  - target temperature <- GET_TEMP_SETPOINT;                              -> SET_TEMP_SETPOINT
++///  - current temperature <- water temperature from GET_SENSORS
++class AnovaNanoClimate : public climate::Climate, public Component, public Parented<AnovaNano> {
++ public:
++  void setup() override;
++  void dump_config() override;
++  climate::ClimateTraits traits() override;
++
++  void on_hub_update();
++
++ protected:
++  void control(const climate::ClimateCall &call) override;
++};
++
++}  // namespace esphome::anova_nano
++
++#endif
+diff --git a/components/anova_nano/anova_nano_number.cpp b/components/anova_nano/anova_nano_number.cpp
+new file mode 100644
+index 0000000..5d35815
+--- /dev/null
++++ b/components/anova_nano/anova_nano_number.cpp
+@@ -0,0 +1,22 @@
++#include "anova_nano_number.h"
++
++#if defined(USE_ESP32) && defined(USE_NUMBER)
++
++#include <cmath>
++
++#include "esphome/core/log.h"
++
++namespace esphome::anova_nano {
++
++static const char *const TAG = "anova_nano.number";
++
++void AnovaNanoTimerNumber::dump_config() { LOG_NUMBER("", "Anova Nano Timer", this); }
++
++void AnovaNanoTimerNumber::control(float value) {
++  this->parent_->set_timer(static_cast<int32_t>(std::lround(value)));
++  this->publish_state(value);  // optimistic; corrected by the follow-up refresh
++}
++
++}  // namespace esphome::anova_nano
++
++#endif
+diff --git a/components/anova_nano/anova_nano_number.h b/components/anova_nano/anova_nano_number.h
+new file mode 100644
+index 0000000..a702cdb
+--- /dev/null
++++ b/components/anova_nano/anova_nano_number.h
+@@ -0,0 +1,27 @@
++#pragma once
++
++#include "esphome/core/defines.h"
++
++#if defined(USE_ESP32) && defined(USE_NUMBER)
++
++#include "esphome/core/component.h"
++#include "esphome/core/helpers.h"
++#include "esphome/components/number/number.h"
++#include "anova_nano.h"
++
++namespace esphome::anova_nano {
++
++/// Cooking timer in minutes: GET_COOKING_TIMER / SET_COOKING_TIMER (PyAnova.get_timer / set_timer).
++class AnovaNanoTimerNumber : public number::Number, public Component, public Parented<AnovaNano> {
++ public:
++  void setup() override { this->parent_->register_timer_number(this); }
++  void dump_config() override;
++  void on_hub_update(int32_t minutes) { this->publish_state(static_cast<float>(minutes)); }
++
++ protected:
++  void control(float value) override;
++};
++
++}  // namespace esphome::anova_nano
++
++#endif
+diff --git a/components/anova_nano/anova_nano_protocol.cpp b/components/anova_nano/anova_nano_protocol.cpp
+new file mode 100644
+index 0000000..e59ca5b
+--- /dev/null
++++ b/components/anova_nano/anova_nano_protocol.cpp
+@@ -0,0 +1,379 @@
++#include "anova_nano_protocol.h"
++
++#include <cmath>
++
++namespace esphome::anova_nano::protocol {
++
++const char *message_type_name(uint8_t type) {
++  switch (type) {
++    case SET_TEMP_SETPOINT:
++      return "SET_TEMP_SETPOINT";
++    case GET_TEMP_SETPOINT:
++      return "GET_TEMP_SETPOINT";
++    case GET_SENSORS:
++      return "GET_SENSORS";
++    case SET_TEMP_UNITS:
++      return "SET_TEMP_UNITS";
++    case GET_TEMP_UNITS:
++      return "GET_TEMP_UNITS";
++    case START_COOKING:
++      return "START_COOKING";
++    case STOP_COOKING:
++      return "STOP_COOKING";
++    case SET_COOKING_TIMER:
++      return "SET_COOKING_TIMER";
++    case GET_COOKING_TIMER:
++      return "GET_COOKING_TIMER";
++    case GET_DEVICE_INFO:
++      return "GET_DEVICE_INFO";
++    case GET_FIRMWARE_INFO:
++      return "GET_FIRMWARE_INFO";
++    default:
++      return "UNKNOWN";
++  }
++}
++
++// ---- Framing -------------------------------------------------------------
++
++std::vector<uint8_t> cobs_encode(const uint8_t *data, size_t len, bool append_delimiter) {
++  // Line-for-line port of encode_command() to keep the 254-byte block edge case identical.
++  std::vector<uint8_t> result;
++  result.reserve(len + len / 254 + 3);
++  result.push_back(0);
++  size_t last_value = 0;
++  size_t current_index = 1;
++
++  auto reset_index = [&](bool is_end) {
++    result[last_value] = static_cast<uint8_t>(current_index);
++    last_value = result.size();
++    if (is_end)
++      result.push_back(0);
++    current_index = 1;
++  };
++
++  for (size_t u = 0; u < len; u++) {
++    if (data[u] == 0) {
++      reset_index(true);
++    } else {
++      result.push_back(data[u]);
++      current_index++;
++      if (current_index == 255)
++        reset_index(true);
++    }
++  }
++  reset_index(false);
++  if (append_delimiter)
++    result.push_back(0);
++  return result;
++}
++
++bool cobs_decode(const uint8_t *data, size_t len, std::vector<uint8_t> &out) {
++  out.clear();
++  size_t i = 0;
++  while (i < len) {
++    uint8_t code = data[i++];
++    if (code == 0)
++      return false;  // 0x00 is never valid inside a COBS frame
++    for (uint8_t k = 1; k < code; k++) {
++      if (i >= len)
++        return false;  // truncated block
++      out.push_back(data[i++]);
++    }
++    if (code < 0xFF && i < len)
++      out.push_back(0);
++  }
++  return true;
++}
++
++std::vector<uint8_t> build_command(MessageType type, const std::vector<uint8_t> &payload) {
++  std::vector<uint8_t> raw;
++  raw.reserve(2 + payload.size());
++  raw.push_back(DOMAIN_CONFIG);
++  raw.push_back(type);
++  raw.insert(raw.end(), payload.begin(), payload.end());
++  return cobs_encode(raw.data(), raw.size(), true);
++}
++
++std::vector<uint8_t> build_command(MessageType type, int32_t integer_value) {
++  return build_command(type, encode_integer_value(integer_value));
++}
++
++size_t FrameAssembler::feed(const uint8_t *data, size_t len, std::vector<std::vector<uint8_t>> &frames) {
++  size_t completed = 0;
++  for (size_t i = 0; i < len; i++) {
++    if (data[i] == 0) {
++      if (!this->buffer_.empty()) {
++        frames.push_back(this->buffer_);
++        completed++;
++      }
++      this->buffer_.clear();
++      continue;
++    }
++    if (this->buffer_.size() >= MAX_FRAME) {
++      // Garbage or lost delimiter: drop and resync on the next 0x00.
++      this->buffer_.clear();
++    }
++    this->buffer_.push_back(data[i]);
++  }
++  return completed;
++}
++
++bool parse_frame(const uint8_t *data, size_t len, Frame &frame) {
++  std::vector<uint8_t> decoded;
++  if (!cobs_decode(data, len, decoded) || decoded.size() < 2)
++    return false;
++  frame.domain = decoded[0];
++  frame.message_type = decoded[1];
++  frame.payload.assign(decoded.begin() + 2, decoded.end());
++  return true;
++}
++
++// ---- Protobuf ------------------------------------------------------------
++
++namespace {
++
++enum WireType : uint8_t { VARINT = 0, FIXED64 = 1, LEN = 2, FIXED32 = 5 };
++
++void write_varint(std::vector<uint8_t> &out, uint64_t v) {
++  while (v >= 0x80) {
++    out.push_back(static_cast<uint8_t>(v | 0x80));
++    v >>= 7;
++  }
++  out.push_back(static_cast<uint8_t>(v));
++}
++
++class Reader {
++ public:
++  Reader(const uint8_t *data, size_t len) : p_(data), end_(data + len) {}
++  bool done() const { return this->p_ >= this->end_; }
++
++  bool varint(uint64_t &v) {
++    v = 0;
++    for (int shift = 0; shift < 64; shift += 7) {
++      if (this->p_ >= this->end_)
++        return false;
++      uint8_t b = *this->p_++;
++      v |= static_cast<uint64_t>(b & 0x7F) << shift;
++      if ((b & 0x80) == 0)
++        return true;
++    }
++    return false;
++  }
++
++  bool tag(uint32_t &field, uint8_t &wire) {
++    uint64_t t;
++    if (!this->varint(t))
++      return false;
++    field = static_cast<uint32_t>(t >> 3);
++    wire = static_cast<uint8_t>(t & 0x7);
++    return field != 0;
++  }
++
++  bool bytes(const uint8_t *&data, size_t &len) {
++    uint64_t n;
++    if (!this->varint(n) || n > static_cast<uint64_t>(this->end_ - this->p_))
++      return false;
++    data = this->p_;
++    len = static_cast<size_t>(n);
++    this->p_ += len;
++    return true;
++  }
++
++  bool skip(uint8_t wire) {
++    uint64_t v;
++    const uint8_t *d;
++    size_t n;
++    switch (wire) {
++      case VARINT:
++        return this->varint(v);
++      case LEN:
++        return this->bytes(d, n);
++      case FIXED64:
++        return this->advance(8);
++      case FIXED32:
++        return this->advance(4);
++      default:
++        return false;
++    }
++  }
++
++ private:
++  bool advance(size_t n) {
++    if (static_cast<size_t>(this->end_ - this->p_) < n)
++      return false;
++    this->p_ += n;
++    return true;
++  }
++  const uint8_t *p_;
++  const uint8_t *end_;
++};
++
++// proto3 int32/enum: varint holding a sign-extended 64-bit value; truncate to 32 bits.
++inline int32_t as_int32(uint64_t v) { return static_cast<int32_t>(static_cast<uint32_t>(v)); }
++
++}  // namespace
++
++std::vector<uint8_t> encode_integer_value(int32_t value) {
++  std::vector<uint8_t> out;
++  if (value == 0)
++    return out;  // proto3: default value is not serialized
++  out.push_back((1 << 3) | VARINT);
++  write_varint(out, static_cast<uint64_t>(static_cast<int64_t>(value)));
++  return out;
++}
++
++bool decode_integer_value(const uint8_t *data, size_t len, int32_t &value) {
++  value = 0;
++  Reader r(data, len);
++  while (!r.done()) {
++    uint32_t field;
++    uint8_t wire;
++    if (!r.tag(field, wire))
++      return false;
++    if (field == 1 && wire == VARINT) {
++      uint64_t v;
++      if (!r.varint(v))
++        return false;
++      value = as_int32(v);
++    } else if (!r.skip(wire)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++static bool decode_sensor_value(const uint8_t *data, size_t len, SensorValue &sv) {
++  sv = SensorValue{};
++  Reader r(data, len);
++  while (!r.done()) {
++    uint32_t field;
++    uint8_t wire;
++    if (!r.tag(field, wire))
++      return false;
++    if (wire == VARINT && field >= 1 && field <= 3) {
++      uint64_t v;
++      if (!r.varint(v))
++        return false;
++      if (field == 1)
++        sv.value = as_int32(v);
++      else if (field == 2)
++        sv.units = as_int32(v);
++      else
++        sv.sensor_type = as_int32(v);
++    } else if (!r.skip(wire)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++bool decode_sensor_value_list(const uint8_t *data, size_t len, std::vector<SensorValue> &values) {
++  values.clear();
++  Reader r(data, len);
++  while (!r.done()) {
++    uint32_t field;
++    uint8_t wire;
++    if (!r.tag(field, wire))
++      return false;
++    if (field == 1 && wire == LEN) {
++      const uint8_t *sub;
++      size_t sub_len;
++      if (!r.bytes(sub, sub_len))
++        return false;
++      SensorValue sv;
++      if (!decode_sensor_value(sub, sub_len, sv))
++        return false;
++      values.push_back(sv);
++    } else if (!r.skip(wire)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++bool decode_firmware_info(const uint8_t *data, size_t len, FirmwareInfo &info) {
++  info = FirmwareInfo{};
++  Reader r(data, len);
++  while (!r.done()) {
++    uint32_t field;
++    uint8_t wire;
++    if (!r.tag(field, wire))
++      return false;
++    if ((field == 1 || field == 2) && wire == LEN) {
++      const uint8_t *s;
++      size_t n;
++      if (!r.bytes(s, n))
++        return false;
++      (field == 1 ? info.commit_id : info.tag_id).assign(reinterpret_cast<const char *>(s), n);
++    } else if (field == 3 && wire == VARINT) {
++      uint64_t v;
++      if (!r.varint(v))
++        return false;
++      info.date_code = static_cast<uint32_t>(v);
++    } else if (!r.skip(wire)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++// ---- Semantics -------------------------------------------------------------
++
++bool unit_and_factor(int32_t units, char &unit, int &factor) {
++  switch (units) {
++    case DEGREES_C:
++      unit = 'C';
++      factor = 1;
++      return true;
++    case DEGREES_POINT_1C:
++      unit = 'C';
++      factor = 10;
++      return true;
++    case DEGREES_POINT_01C:
++      unit = 'C';
++      factor = 100;
++      return true;
++    case DEGREES_F:
++      unit = 'F';
++      factor = 1;
++      return true;
++    case DEGREES_POINT_1F:
++      unit = 'F';
++      factor = 10;
++      return true;
++    case DEGREES_POINT_01F:
++      unit = 'F';
++      factor = 100;
++      return true;
++    default:
++      return false;
++  }
++}
++
++static bool scaled(const SensorValue &sv, float &value, char &unit) {
++  int factor;
++  if (!unit_and_factor(sv.units, unit, factor))
++    return false;
++  value = static_cast<float>(static_cast<double>(sv.value) / factor);
++  return true;
++}
++
++bool to_sensor_values(const std::vector<SensorValue> &list, SensorValues &out) {
++  // Positional, exactly like PyAnova.get_sensor_values():
++  // 0 water, 1 heater, 2 triac, 3 unused, 4 internal, 5 water_low, 6 water_leak, 7 motor_speed
++  if (list.size() < 8)
++    return false;
++  if (!scaled(list[0], out.water_temp, out.water_temp_unit) ||
++      !scaled(list[1], out.heater_temp, out.heater_temp_unit) ||
++      !scaled(list[2], out.triac_temp, out.triac_temp_unit) ||
++      !scaled(list[4], out.internal_temp, out.internal_temp_unit))
++    return false;
++  out.water_low = list[5].value != 0;
++  out.water_leak = list[6].value != 0;
++  out.motor_speed = list[7].value;
++  return true;
++}
++
++int32_t setpoint_to_raw(double temperature) { return static_cast<int32_t>(std::nearbyint(temperature * 10.0)); }
++
++}  // namespace esphome::anova_nano::protocol
+diff --git a/components/anova_nano/anova_nano_protocol.h b/components/anova_nano/anova_nano_protocol.h
+new file mode 100644
+index 0000000..89b8942
+--- /dev/null
++++ b/components/anova_nano/anova_nano_protocol.h
+@@ -0,0 +1,158 @@
++#pragma once
++
++// Anova Nano BLE protocol, ported from pyanova-nano (https://github.com/filmkorn/pyanova-nano).
++//
++// Wire format (both directions):
++//   COBS( [domain=0, message_type, protobuf payload...] ) + 0x00 delimiter
++//
++// This file has no ESPHome dependencies so it can be unit-tested on the host
++// (see tests/test_protocol.cpp, whose expected values are generated from the
++// reference implementation by tests/gen_golden.py).
++
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace esphome::anova_nano::protocol {
++
++// messages.proto: DomainType
++static constexpr uint8_t DOMAIN_CONFIG = 0;  // ANOVA_DOMAIN_ID_CONFIG
++
++// messages.proto: ConfigDomainMessageType (only the ones pyanova-nano uses)
++enum MessageType : uint8_t {
++  SET_TEMP_SETPOINT = 3,
++  GET_TEMP_SETPOINT = 4,
++  GET_SENSORS = 5,
++  SET_TEMP_UNITS = 6,
++  GET_TEMP_UNITS = 7,
++  START_COOKING = 10,
++  STOP_COOKING = 11,
++  SET_COOKING_TIMER = 16,
++  GET_COOKING_TIMER = 18,
++  GET_DEVICE_INFO = 25,
++  GET_FIRMWARE_INFO = 26,
++};
++
++// messages.proto: UnitType
++enum UnitType : int32_t {
++  DEGREES_POINT_1C = 0,
++  DEGREES_POINT_1F = 1,
++  MOTOR_SPEED = 2,
++  BOOLEAN = 3,
++  DEGREES_POINT_01C = 4,
++  DEGREES_POINT_01F = 5,
++  DEGREES_C = 6,
++  DEGREES_F = 7,
++};
++
++const char *message_type_name(uint8_t type);
++
++// ---- Framing -------------------------------------------------------------
++
++/// Port of pyanova_nano.commands.encode_command (COBS).
++std::vector<uint8_t> cobs_encode(const uint8_t *data, size_t len, bool append_delimiter = true);
++
++/// COBS-decode one frame (delimiter already stripped). Equivalent to
++/// pyanova_nano.commands.convert_buffer for complete frames, minus the
++/// 2-byte header strip (see parse_frame).
++bool cobs_decode(const uint8_t *data, size_t len, std::vector<uint8_t> &out);
++
++/// Port of pyanova_nano.commands.create_command_array.
++/// Payload is a serialized IntegerValue for write commands, empty for reads.
++std::vector<uint8_t> build_command(MessageType type, const std::vector<uint8_t> &payload = {});
++std::vector<uint8_t> build_command(MessageType type, int32_t integer_value);
++
++/// Reassembles BLE notifications into frames.
++///
++/// pyanova-nano accumulates notification chunks until convert_buffer() yields
++/// no gaps. Because COBS output never contains 0x00, the trailing 0x00 is an
++/// unambiguous end-of-frame marker; splitting on it gives the same frames for
++/// well-formed input and does not mis-detect completion when a chunk boundary
++/// falls right after a block code byte.
++class FrameAssembler {
++ public:
++  static constexpr size_t MAX_FRAME = 1024;
++
++  /// Feed a notification. Returns the number of completed frames appended to `frames`.
++  size_t feed(const uint8_t *data, size_t len, std::vector<std::vector<uint8_t>> &frames);
++  void reset() { this->buffer_.clear(); }
++  size_t pending() const { return this->buffer_.size(); }
++
++ protected:
++  std::vector<uint8_t> buffer_;
++};
++
++struct Frame {
++  uint8_t domain{0};
++  uint8_t message_type{0};
++  std::vector<uint8_t> payload;
++};
++
++/// Decode a complete frame (without delimiter) and split off the 2-byte header,
++/// as convert_buffer's `results[2:]` does.
++bool parse_frame(const uint8_t *data, size_t len, Frame &frame);
++
++// ---- Protobuf (hand-rolled: only the messages pyanova-nano uses) ----------
++//
++// proto3 omits fields equal to their default (0), so every field defaults to 0
++// when absent, e.g. a SensorValue {value: 0, units: DEGREES_POINT_1C, sensorType: WaterTemp}
++// is serialized as an empty sub-message.
++
++std::vector<uint8_t> encode_integer_value(int32_t value);
++bool decode_integer_value(const uint8_t *data, size_t len, int32_t &value);
++
++struct SensorValue {
++  int32_t value{0};
++  int32_t units{0};
++  int32_t sensor_type{0};
++};
++bool decode_sensor_value_list(const uint8_t *data, size_t len, std::vector<SensorValue> &values);
++
++struct FirmwareInfo {
++  std::string commit_id;
++  std::string tag_id;
++  uint32_t date_code{0};
++};
++bool decode_firmware_info(const uint8_t *data, size_t len, FirmwareInfo &info);
++
++// ---- Semantics (ports of PyAnova methods) ----------------------------------
++
++/// Port of PyAnova._get_unit_and_factor. Returns false for unknown units
++/// (the reference raises ValueError).
++bool unit_and_factor(int32_t units, char &unit, int &factor);
++
++/// Port of PyAnova.get_sensor_values: positional, 8 entries, index 3 unused.
++struct SensorValues {
++  float water_temp{0};
++  char water_temp_unit{'C'};
++  float heater_temp{0};
++  char heater_temp_unit{'C'};
++  float triac_temp{0};
++  char triac_temp_unit{'C'};
++  float internal_temp{0};
++  char internal_temp_unit{'C'};
++  bool water_low{false};
++  bool water_leak{false};
++  int32_t motor_speed{0};
++
++  /// PyAnova.get_status(): "running" iff motor_speed != 0.
++  bool running() const { return this->motor_speed != 0; }
++};
++bool to_sensor_values(const std::vector<SensorValue> &list, SensorValues &out);
++
++/// PyAnova.get_target_temperature: raw / 10, in the device's current unit.
++inline float setpoint_from_raw(int32_t raw) { return static_cast<float>(raw) / 10.0f; }
++
++/// PyAnova.set_target_temperature: int(round(t * 10)). Python's round() is
++/// round-half-to-even, so this uses nearbyint (default FE_TONEAREST).
++int32_t setpoint_to_raw(double temperature);
++
++/// PyAnova.set_unit: "c" -> DEGREES_C, anything else -> DEGREES_F.
++inline int32_t unit_to_raw(char unit) { return (unit == 'c' || unit == 'C') ? DEGREES_C : DEGREES_F; }
++
++inline float f_to_c(float f) { return (f - 32.0f) * 5.0f / 9.0f; }
++inline float c_to_f(float c) { return c * 9.0f / 5.0f + 32.0f; }
++inline float to_celsius(float value, char unit) { return unit == 'F' ? f_to_c(value) : value; }
++
++}  // namespace esphome::anova_nano::protocol
+diff --git a/components/anova_nano/anova_nano_select.cpp b/components/anova_nano/anova_nano_select.cpp
+new file mode 100644
+index 0000000..62605ac
+--- /dev/null
++++ b/components/anova_nano/anova_nano_select.cpp
+@@ -0,0 +1,27 @@
++#include "anova_nano_select.h"
++
++#if defined(USE_ESP32) && defined(USE_SELECT)
++
++#include "esphome/core/log.h"
++
++namespace esphome::anova_nano {
++
++static const char *const TAG = "anova_nano.select";
++
++void AnovaNanoUnitSelect::dump_config() { LOG_SELECT("", "Anova Nano Unit", this); }
++
++void AnovaNanoUnitSelect::on_hub_update(char unit) {
++  const size_t index = unit == 'F' ? 1 : 0;
++  auto active = this->active_index();
++  if (!active.has_value() || *active != index)
++    this->publish_state(index);
++}
++
++void AnovaNanoUnitSelect::control(size_t index) {
++  this->parent_->set_unit(index == 1 ? 'F' : 'C');
++  this->publish_state(index);
++}
++
++}  // namespace esphome::anova_nano
++
++#endif
+diff --git a/components/anova_nano/anova_nano_select.h b/components/anova_nano/anova_nano_select.h
+new file mode 100644
+index 0000000..80764af
+--- /dev/null
++++ b/components/anova_nano/anova_nano_select.h
+@@ -0,0 +1,28 @@
++#pragma once
++
++#include "esphome/core/defines.h"
++
++#if defined(USE_ESP32) && defined(USE_SELECT)
++
++#include "esphome/core/component.h"
++#include "esphome/core/helpers.h"
++#include "esphome/components/select/select.h"
++#include "anova_nano.h"
++
++namespace esphome::anova_nano {
++
++/// Display unit on the cooker: GET_TEMP_UNITS / SET_TEMP_UNITS (PyAnova.get_unit / set_unit).
++/// Options are fixed by codegen to ["C", "F"].
++class AnovaNanoUnitSelect : public select::Select, public Component, public Parented<AnovaNano> {
++ public:
++  void setup() override { this->parent_->register_unit_select(this); }
++  void dump_config() override;
++  void on_hub_update(char unit);
++
++ protected:
++  void control(size_t index) override;
++};
++
++}  // namespace esphome::anova_nano
++
++#endif
+diff --git a/components/anova_nano/binary_sensor.py b/components/anova_nano/binary_sensor.py
+new file mode 100644
+index 0000000..cdb5ebd
+--- /dev/null
++++ b/components/anova_nano/binary_sensor.py
+@@ -0,0 +1,39 @@
++import esphome.codegen as cg
++from esphome.components import binary_sensor
++import esphome.config_validation as cv
++from esphome.const import (
++    DEVICE_CLASS_MOISTURE,
++    DEVICE_CLASS_PROBLEM,
++    DEVICE_CLASS_RUNNING,
++)
++
++from . import ANOVA_NANO_CHILD_SCHEMA, CONF_ANOVA_NANO_ID
++
++DEPENDENCIES = ["anova_nano"]
++
++CONF_RUNNING = "running"
++CONF_WATER_LOW = "water_low"
++CONF_WATER_LEAK = "water_leak"
++
++BINARY_SENSORS = {
++    # PyAnova.get_status(): running iff motor_speed != 0
++    CONF_RUNNING: binary_sensor.binary_sensor_schema(device_class=DEVICE_CLASS_RUNNING),
++    CONF_WATER_LOW: binary_sensor.binary_sensor_schema(
++        device_class=DEVICE_CLASS_PROBLEM, icon="mdi:water-alert"
++    ),
++    CONF_WATER_LEAK: binary_sensor.binary_sensor_schema(
++        device_class=DEVICE_CLASS_MOISTURE
++    ),
++}
++
++CONFIG_SCHEMA = ANOVA_NANO_CHILD_SCHEMA.extend(
++    {cv.Optional(key): schema for key, schema in BINARY_SENSORS.items()}
++)
++
++
++async def to_code(config):
++    hub = await cg.get_variable(config[CONF_ANOVA_NANO_ID])
++    for key in BINARY_SENSORS:
++        if conf := config.get(key):
++            sens = await binary_sensor.new_binary_sensor(conf)
++            cg.add(getattr(hub, f"set_{key}_binary_sensor")(sens))
+diff --git a/components/anova_nano/climate.py b/components/anova_nano/climate.py
+new file mode 100644
+index 0000000..1a30dfd
+--- /dev/null
++++ b/components/anova_nano/climate.py
+@@ -0,0 +1,23 @@
++import esphome.codegen as cg
++from esphome.components import climate
++import esphome.config_validation as cv
++
++from . import ANOVA_NANO_CHILD_SCHEMA, CONF_ANOVA_NANO_ID, anova_nano_ns
++
++DEPENDENCIES = ["anova_nano"]
++
++AnovaNanoClimate = anova_nano_ns.class_(
++    "AnovaNanoClimate", climate.Climate, cg.Component
++)
++
++CONFIG_SCHEMA = (
++    climate.climate_schema(AnovaNanoClimate)
++    .extend(ANOVA_NANO_CHILD_SCHEMA)
++    .extend(cv.COMPONENT_SCHEMA)
++)
++
++
++async def to_code(config):
++    var = await climate.new_climate(config)
++    await cg.register_component(var, config)
++    await cg.register_parented(var, config[CONF_ANOVA_NANO_ID])
+diff --git a/components/anova_nano/number.py b/components/anova_nano/number.py
+new file mode 100644
+index 0000000..4dbc6d9
+--- /dev/null
++++ b/components/anova_nano/number.py
+@@ -0,0 +1,37 @@
++import esphome.codegen as cg
++from esphome.components import number
++import esphome.config_validation as cv
++from esphome.const import DEVICE_CLASS_DURATION, UNIT_MINUTE
++
++from . import ANOVA_NANO_CHILD_SCHEMA, CONF_ANOVA_NANO_ID, anova_nano_ns
++
++DEPENDENCIES = ["anova_nano"]
++
++CONF_TIMER = "timer"
++
++AnovaNanoTimerNumber = anova_nano_ns.class_(
++    "AnovaNanoTimerNumber", number.Number, cg.Component
++)
++
++# The device stores minutes in an int32; 99 h 59 min matches the cooker's own display limit.
++TIMER_MAX_MINUTES = 5999
++
++CONFIG_SCHEMA = ANOVA_NANO_CHILD_SCHEMA.extend(
++    {
++        cv.Optional(CONF_TIMER): number.number_schema(
++            AnovaNanoTimerNumber,
++            icon="mdi:timer-cog-outline",
++            device_class=DEVICE_CLASS_DURATION,
++            unit_of_measurement=UNIT_MINUTE,
++        ).extend(cv.COMPONENT_SCHEMA),
++    }
++)
++
++
++async def to_code(config):
++    if conf := config.get(CONF_TIMER):
++        var = await number.new_number(
++            conf, min_value=0, max_value=TIMER_MAX_MINUTES, step=1
++        )
++        await cg.register_component(var, conf)
++        await cg.register_parented(var, config[CONF_ANOVA_NANO_ID])
+diff --git a/components/anova_nano/select.py b/components/anova_nano/select.py
+new file mode 100644
+index 0000000..a0fb013
+--- /dev/null
++++ b/components/anova_nano/select.py
+@@ -0,0 +1,34 @@
++import esphome.codegen as cg
++from esphome.components import select
++import esphome.config_validation as cv
++from esphome.const import ENTITY_CATEGORY_CONFIG
++
++from . import ANOVA_NANO_CHILD_SCHEMA, CONF_ANOVA_NANO_ID, anova_nano_ns
++
++DEPENDENCIES = ["anova_nano"]
++
++CONF_UNIT = "unit"
++
++AnovaNanoUnitSelect = anova_nano_ns.class_(
++    "AnovaNanoUnitSelect", select.Select, cg.Component
++)
++
++# Index order is relied on by AnovaNanoUnitSelect (0 = C, 1 = F).
++UNIT_OPTIONS = ["C", "F"]
++
++CONFIG_SCHEMA = ANOVA_NANO_CHILD_SCHEMA.extend(
++    {
++        cv.Optional(CONF_UNIT): select.select_schema(
++            AnovaNanoUnitSelect,
++            icon="mdi:thermometer",
++            entity_category=ENTITY_CATEGORY_CONFIG,
++        ).extend(cv.COMPONENT_SCHEMA),
++    }
++)
++
++
++async def to_code(config):
++    if conf := config.get(CONF_UNIT):
++        var = await select.new_select(conf, options=UNIT_OPTIONS)
++        await cg.register_component(var, conf)
++        await cg.register_parented(var, config[CONF_ANOVA_NANO_ID])
+diff --git a/components/anova_nano/sensor.py b/components/anova_nano/sensor.py
+new file mode 100644
+index 0000000..c4eb25b
+--- /dev/null
++++ b/components/anova_nano/sensor.py
+@@ -0,0 +1,67 @@
++import esphome.codegen as cg
++from esphome.components import sensor
++import esphome.config_validation as cv
++from esphome.const import (
++    CONF_INTERNAL_TEMPERATURE,
++    CONF_TARGET_TEMPERATURE,
++    DEVICE_CLASS_DURATION,
++    DEVICE_CLASS_TEMPERATURE,
++    ENTITY_CATEGORY_DIAGNOSTIC,
++    STATE_CLASS_MEASUREMENT,
++    UNIT_CELSIUS,
++    UNIT_MINUTE,
++)
++
++from . import ANOVA_NANO_CHILD_SCHEMA, CONF_ANOVA_NANO_ID
++
++DEPENDENCIES = ["anova_nano"]
++
++CONF_WATER_TEMPERATURE = "water_temperature"
++CONF_HEATER_TEMPERATURE = "heater_temperature"
++CONF_TRIAC_TEMPERATURE = "triac_temperature"
++CONF_MOTOR_SPEED = "motor_speed"
++CONF_TIMER = "timer"
++
++
++def _temperature(category=cv.UNDEFINED):
++    return sensor.sensor_schema(
++        unit_of_measurement=UNIT_CELSIUS,
++        accuracy_decimals=1,
++        device_class=DEVICE_CLASS_TEMPERATURE,
++        state_class=STATE_CLASS_MEASUREMENT,
++        entity_category=category,
++    )
++
++
++# All temperatures are published in °C; values reported in °F are converted.
++SENSORS = {
++    CONF_WATER_TEMPERATURE: _temperature(),
++    CONF_TARGET_TEMPERATURE: _temperature(),
++    CONF_HEATER_TEMPERATURE: _temperature(ENTITY_CATEGORY_DIAGNOSTIC),
++    CONF_TRIAC_TEMPERATURE: _temperature(ENTITY_CATEGORY_DIAGNOSTIC),
++    CONF_INTERNAL_TEMPERATURE: _temperature(ENTITY_CATEGORY_DIAGNOSTIC),
++    CONF_MOTOR_SPEED: sensor.sensor_schema(
++        icon="mdi:fan",
++        accuracy_decimals=0,
++        state_class=STATE_CLASS_MEASUREMENT,
++        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
++    ),
++    CONF_TIMER: sensor.sensor_schema(
++        unit_of_measurement=UNIT_MINUTE,
++        icon="mdi:timer-outline",
++        accuracy_decimals=0,
++        device_class=DEVICE_CLASS_DURATION,
++    ),
++}
++
++CONFIG_SCHEMA = ANOVA_NANO_CHILD_SCHEMA.extend(
++    {cv.Optional(key): schema for key, schema in SENSORS.items()}
++)
++
++
++async def to_code(config):
++    hub = await cg.get_variable(config[CONF_ANOVA_NANO_ID])
++    for key in SENSORS:
++        if conf := config.get(key):
++            sens = await sensor.new_sensor(conf)
++            cg.add(getattr(hub, f"set_{key}_sensor")(sens))
+diff --git a/components/anova_nano/text_sensor.py b/components/anova_nano/text_sensor.py
+new file mode 100644
+index 0000000..58366c0
+--- /dev/null
++++ b/components/anova_nano/text_sensor.py
+@@ -0,0 +1,41 @@
++import esphome.codegen as cg
++from esphome.components import text_sensor
++import esphome.config_validation as cv
++from esphome.const import ENTITY_CATEGORY_DIAGNOSTIC
++
++from . import ANOVA_NANO_CHILD_SCHEMA, CONF_ANOVA_NANO_ID
++
++DEPENDENCIES = ["anova_nano"]
++
++CONF_FIRMWARE_VERSION = "firmware_version"
++CONF_FIRMWARE_COMMIT = "firmware_commit"
++CONF_DEVICE_INFO = "device_info"
++CONF_UNIT = "unit"
++
++TEXT_SENSORS = {
++    CONF_FIRMWARE_VERSION: text_sensor.text_sensor_schema(
++        icon="mdi:chip", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
++    ),
++    CONF_FIRMWARE_COMMIT: text_sensor.text_sensor_schema(
++        icon="mdi:source-commit", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
++    ),
++    # Raw GET_DEVICE_INFO value; pyanova-nano doesn't document its meaning.
++    CONF_DEVICE_INFO: text_sensor.text_sensor_schema(
++        icon="mdi:information-outline", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
++    ),
++    CONF_UNIT: text_sensor.text_sensor_schema(
++        icon="mdi:temperature-celsius", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
++    ),
++}
++
++CONFIG_SCHEMA = ANOVA_NANO_CHILD_SCHEMA.extend(
++    {cv.Optional(key): schema for key, schema in TEXT_SENSORS.items()}
++)
++
++
++async def to_code(config):
++    hub = await cg.get_variable(config[CONF_ANOVA_NANO_ID])
++    for key in TEXT_SENSORS:
++        if conf := config.get(key):
++            sens = await text_sensor.new_text_sensor(conf)
++            cg.add(getattr(hub, f"set_{key}_text_sensor")(sens))
+diff --git a/example/anova_nano.yaml b/example/anova_nano.yaml
+new file mode 100644
+index 0000000..2f1f80b
+--- /dev/null
++++ b/example/anova_nano.yaml
+@@ -0,0 +1,94 @@
++# Full example: every entity the component exposes.
++# Find your cooker's MAC with the esp32_ble_tracker logs (it advertises as "Nano")
++# or with `bluetoothctl scan on`.
++substitutions:
++  name: anova-nano
++  anova_mac: "AA:BB:CC:DD:EE:FF"
++
++esphome:
++  name: ${name}
++
++esp32:
++  board: esp32dev
++  framework:
++    type: esp-idf
++
++logger:
++
++api:
++  encryption:
++    key: !secret api_encryption_key
++
++ota:
++  - platform: esphome
++    password: !secret ota_password
++
++wifi:
++  ssid: !secret wifi_ssid
++  password: !secret wifi_password
++
++external_components:
++  - source: github://GuyKh/esphome-anova-nano
++    components: [anova_nano]
++
++esp32_ble_tracker:
++
++ble_client:
++  - mac_address: ${anova_mac}
++    id: anova_ble
++
++anova_nano:
++  id: anova
++  ble_client_id: anova_ble
++  update_interval: 30s
++
++climate:
++  - platform: anova_nano
++    name: "Sous vide"
++
++sensor:
++  - platform: anova_nano
++    water_temperature:
++      name: "Water temperature"
++    target_temperature:
++      name: "Target temperature"
++    heater_temperature:
++      name: "Heater temperature"
++    triac_temperature:
++      name: "Triac temperature"
++    internal_temperature:
++      name: "Internal temperature"
++    motor_speed:
++      name: "Motor speed"
++    timer:
++      name: "Timer remaining"
++
++binary_sensor:
++  - platform: anova_nano
++    running:
++      name: "Running"
++    water_low:
++      name: "Water low"
++    water_leak:
++      name: "Water leak"
++
++text_sensor:
++  - platform: anova_nano
++    firmware_version:
++      name: "Firmware version"
++    firmware_commit:
++      name: "Firmware commit"
++    device_info:
++      name: "Device info"
++    unit:
++      name: "Reported unit"
++
++number:
++  - platform: anova_nano
++    timer:
++      name: "Cooking timer"
++
++select:
++  - platform: anova_nano
++    unit:
++      name: "Display unit"
+diff --git a/example/anova_nano_example.yaml b/example/anova_nano_example.yaml
+deleted file mode 100644
+index 8fab803..0000000
+--- a/example/anova_nano_example.yaml
++++ /dev/null
+@@ -1,53 +0,0 @@
+-# Example ESPHome configuration for Anova Nano component
+-# This example shows how to use the Anova Nano component in an ESPHome device.
+-
+-substitutions:
+-  device_name: anova_nano_device
+-
+-esphome:
+-  name: ${device_name}
+-  platform: ESP32
+-  board: esp32dev
+-
+-wifi:
+-  ssid: !secret wifi_ssid
+-  password: !secret wifi_password
+-
+-# Enable logging
+-logger:
+-
+-# Enable Home Assistant API
+-api:
+-
+-# Enable OTA updates
+-ota:
+-
+-# Enable Web Server
+-web_server:
+-  port: 80
+-
+-# Enable MQTT (optional, for Home Assistant discovery via MQTT)
+-# mqtt:
+-#   broker: !secret mqtt_broker
+-#   username: !secret mqtt_user
+-#   password: !secret mqtt_password
+-
+-# External component: our Anova Nano component
+-external_components:
+-  - source: github://github.com/GuyKh/esphome-anova-nano
+-    components: [anova_nano]
+-
+-climate:
+-  - platform: anova_nano
+-    name: "Anova Nano"
+-    # Optional: adjust scan timeout and poll interval
+-    scan_timeout: 5
+-    poll_interval: 30
+-
+-# Optional: sensors to debug the raw data (if needed)
+-# sensor:
+-#   - platform: template
+-#     name: "Anova Nano Raw Temperature"
+-#     lambda: |-
+-#       return id(anova_nano_component).current_temperature_;
+-#     update_interval: 5s
+\ No newline at end of file
+diff --git a/example/example.yaml b/example/example.yaml
+deleted file mode 100644
+index ee8a75f..0000000
+--- a/example/example.yaml
++++ /dev/null
+@@ -1,50 +0,0 @@
+-substitutions:
+-  device_name: anova_nano
+-
+-esphome:
+-  name: ${device_name}
+-  platform: ESP32
+-  board: esp32dev
+-
+-wifi:
+-  ssid: !secret wifi_ssid
+-  password: !secret wifi_password
+-
+-# Enable fallback hotspot (captive portal) in case wifi connection fails
+-ap:
+-  ssid: ${device_name}-fallback
+-  password: !secret ap_password
+-
+-captive_portal:
+-
+-# Enable logging
+-logger:
+-
+-# Enable Home Assistant API
+-api:
+-  password: !secret api_password
+-
+-ota:
+-  password: !secret ota_password
+-
+-# Enable MQTT (optional)
+-mqtt:
+-  broker: !secret mqtt_broker
+-  username: !secret mqtt_user
+-  password: !secret mqtt_password
+-
+-# Anova Nano climate component
+-external_components:
+-  - source: github://<your-username>/esphome-ova-nano
+-    components: [anova_nano]
+-
+-climate:
+-  - platform: anova_nano
+-    name: "Anova Nano"
+-    # Optional: adjust scan timeout and poll interval
+-    scan_timeout: 5
+-    poll_interval: 30
+-
+-# Optional: Enable web server for debugging
+-web_server:
+-  port: 80
+diff --git a/tests/.gitignore b/tests/.gitignore
+new file mode 100644
+index 0000000..d8b4157
+--- /dev/null
++++ b/tests/.gitignore
+@@ -0,0 +1,5 @@
++# Gitignore settings for ESPHome
++# This is an example and may include too much for your use-case.
++# You can modify this file to suit your needs.
++/.esphome/
++/secrets.yaml
+diff --git a/tests/Makefile b/tests/Makefile
+new file mode 100644
+index 0000000..4b0cce1
+--- /dev/null
++++ b/tests/Makefile
+@@ -0,0 +1,18 @@
++# Host-side protocol tests. Run from the repo root: make -C tests
++CXX ?= g++
++CXXFLAGS ?= -std=gnu++17 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined
++ROOT := ..
++
++test: test_protocol
++	./test_protocol
++
++test_protocol: test_protocol.cpp golden_vectors.h $(ROOT)/components/anova_nano/anova_nano_protocol.cpp $(ROOT)/components/anova_nano/anova_nano_protocol.h
++	$(CXX) $(CXXFLAGS) -I$(ROOT)/components/anova_nano -I. test_protocol.cpp $(ROOT)/components/anova_nano/anova_nano_protocol.cpp -o $@
++
++golden: ## regenerate golden vectors from the reference (needs pyanova-nano installed)
++	python3 gen_golden.py > golden_vectors.h
++
++clean:
++	rm -f test_protocol
++
++.PHONY: test golden clean
+diff --git a/tests/build-full.yaml b/tests/build-full.yaml
+new file mode 100644
+index 0000000..64c5d12
+--- /dev/null
++++ b/tests/build-full.yaml
+@@ -0,0 +1,92 @@
++# CI build config: same as example/anova_nano.yaml, with the local component.
++# Find your cooker's MAC with the esp32_ble_tracker logs (it advertises as "Nano")
++# or with `bluetoothctl scan on`.
++substitutions:
++  name: anova-nano
++  anova_mac: "AA:BB:CC:DD:EE:FF"
++
++esphome:
++  name: ${name}
++
++esp32:
++  board: esp32dev
++  framework:
++    type: esp-idf
++
++logger:
++
++api:
++
++ota:
++  - platform: esphome
++
++wifi:
++  ssid: "ci"
++  password: "ci-password"
++
++external_components:
++  - source:
++      type: local
++      path: ../components
++
++esp32_ble_tracker:
++
++ble_client:
++  - mac_address: ${anova_mac}
++    id: anova_ble
++
++anova_nano:
++  id: anova
++  ble_client_id: anova_ble
++  update_interval: 30s
++
++climate:
++  - platform: anova_nano
++    name: "Sous vide"
++
++sensor:
++  - platform: anova_nano
++    water_temperature:
++      name: "Water temperature"
++    target_temperature:
++      name: "Target temperature"
++    heater_temperature:
++      name: "Heater temperature"
++    triac_temperature:
++      name: "Triac temperature"
++    internal_temperature:
++      name: "Internal temperature"
++    motor_speed:
++      name: "Motor speed"
++    timer:
++      name: "Timer remaining"
++
++binary_sensor:
++  - platform: anova_nano
++    running:
++      name: "Running"
++    water_low:
++      name: "Water low"
++    water_leak:
++      name: "Water leak"
++
++text_sensor:
++  - platform: anova_nano
++    firmware_version:
++      name: "Firmware version"
++    firmware_commit:
++      name: "Firmware commit"
++    device_info:
++      name: "Device info"
++    unit:
++      name: "Reported unit"
++
++number:
++  - platform: anova_nano
++    timer:
++      name: "Cooking timer"
++
++select:
++  - platform: anova_nano
++    unit:
++      name: "Display unit"
+diff --git a/tests/build-minimal.yaml b/tests/build-minimal.yaml
+new file mode 100644
+index 0000000..8fc49d2
+--- /dev/null
++++ b/tests/build-minimal.yaml
+@@ -0,0 +1,30 @@
++# CI build config: hub + climate only (no sensor/number/select platforms),
++# to make sure the optional entity code compiles out cleanly.
++esphome:
++  name: anova-nano-min
++
++esp32:
++  board: esp32dev
++  framework:
++    type: esp-idf
++
++logger:
++
++external_components:
++  - source:
++      type: local
++      path: ../components
++
++esp32_ble_tracker:
++
++ble_client:
++  - mac_address: "AA:BB:CC:DD:EE:FF"
++    id: anova_ble
++
++anova_nano:
++  id: anova
++  ble_client_id: anova_ble
++
++climate:
++  - platform: anova_nano
++    name: "Sous vide"
+diff --git a/tests/gen_golden.py b/tests/gen_golden.py
+new file mode 100644
+index 0000000..b2b05cf
+--- /dev/null
++++ b/tests/gen_golden.py
+@@ -0,0 +1,255 @@
++#!/usr/bin/env python3
++"""Generate tests/golden_vectors.h from the reference pyanova-nano implementation.
++
++Every expected value in the C++ tests comes from running pyanova-nano's own code:
++- request frames:  pyanova_nano.commands.create_command_array
++- response frames: pyanova_nano.commands.encode_command (device -> client framing)
++- decoding:        pyanova_nano.commands.convert_buffer + protobuf FromString
++- sensor scaling:  PyAnova.get_sensor_values / get_target_temperature / get_unit
++- setpoint encode: PyAnova.set_target_temperature (int(round(t * 10)), banker's rounding)
++
++CI regenerates this header and fails if it differs, so the C++ port cannot drift
++from the reference without the diff showing up.
++
++Usage:  pip install "pyanova-nano==0.3.5" && python tests/gen_golden.py > tests/golden_vectors.h
++"""
++
++import asyncio
++from importlib.metadata import version
++
++from pyanova_nano import PyAnova
++from pyanova_nano.commands import convert_buffer, create_command_array, encode_command
++from pyanova_nano.proto import messages_pb2 as m
++from pyanova_nano.types import ReadCommands, WriteCommands
++
++
++def c_bytes(data) -> str:
++    return "{" + ", ".join(str(b) for b in data) + "}"
++
++
++def c_str(s: str) -> str:
++    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
++
++
++def response_frame(msg_type: int, payload: bytes) -> bytes:
++    """Frame a device response the way the reference expects to receive it."""
++    frame = encode_command(bytes([m.ANOVA_DOMAIN_ID_CONFIG, msg_type]) + payload, True)
++    # Sanity: the reference decoder must recover the payload exactly.
++    assert bytes(convert_buffer(bytearray(frame))) == payload, (msg_type, payload)
++    return frame
++
++
++class _Capture:
++    """Stand-in for the BLE transport: PyAnova.send_command writes here."""
++
++    def __init__(self):
++        self.written = None
++
++    async def write_gatt_char(self, _uuid, data, response):
++        assert response is False  # reference writes without response
++        self.written = bytes(data)
++
++
++async def _write_frame(coro_factory) -> bytes:
++    """Run a PyAnova write method and capture the exact bytes it sends."""
++    client = PyAnova()
++    cap = _Capture()
++    client._client = cap
++    task = asyncio.ensure_future(coro_factory(client))
++    for _ in range(100):
++        await asyncio.sleep(0)
++        if cap.written is not None:
++            break
++    task.cancel()
++    try:
++        await task
++    except (asyncio.CancelledError, Exception):
++        pass
++    return cap.written
++
++
++async def _decode_via_reference(method_name: str, msg_type: int, payload: bytes):
++    """Feed a framed response through PyAnova's own receive + parse path."""
++    client = PyAnova()
++    cap = _Capture()
++    client._client = cap
++    frame = response_frame(msg_type, payload)
++
++    async def deliver():
++        while cap.written is None:
++            await asyncio.sleep(0)
++        # Deliver in 20-byte notifications like a default-MTU BLE link.
++        for i in range(0, len(frame), 20):
++            client._on_data_received(None, bytearray(frame[i : i + 20]))
++
++    feeder = asyncio.ensure_future(deliver())
++    result = await getattr(client, method_name)()
++    await feeder
++    return frame, result
++
++
++def sensor_list(entries) -> bytes:
++    sl = m.SensorValueList()
++    for value, units, stype in entries:
++        sl.values.append(m.SensorValue(value=value, units=units, sensorType=stype))
++    return sl.SerializeToString()
++
++
++SENSOR_CASES = {
++    "celsius_running": [
++        (5823, m.DEGREES_POINT_01C, m.WaterTemp),
++        (6110, m.DEGREES_POINT_01C, m.HeaterTemp),
++        (4512, m.DEGREES_POINT_01C, m.TriacTemp),
++        (0, m.DEGREES_POINT_01C, m.UnusedTemp),
++        (3505, m.DEGREES_POINT_01C, m.InternalTemp),
++        (0, m.BOOLEAN, m.WaterLow),
++        (0, m.BOOLEAN, m.WaterLeak),
++        (1800, m.MOTOR_SPEED, m.MotorSpeed),
++    ],
++    "fahrenheit_alarms_stopped": [
++        (1405, m.DEGREES_POINT_1F, m.WaterTemp),
++        (1500, m.DEGREES_POINT_1F, m.HeaterTemp),
++        (99, m.DEGREES_F, m.TriacTemp),
++        (0, m.DEGREES_POINT_1F, m.UnusedTemp),
++        (9512, m.DEGREES_POINT_01F, m.InternalTemp),
++        (1, m.BOOLEAN, m.WaterLow),
++        (1, m.BOOLEAN, m.WaterLeak),
++        (0, m.MOTOR_SPEED, m.MotorSpeed),
++    ],
++    # Water temp entry is all-default -> serialized as an empty sub-message (0a 00),
++    # plus a negative temperature (10-byte varint) to exercise sign handling.
++    "zero_and_negative": [
++        (0, m.DEGREES_POINT_1C, m.WaterTemp),
++        (-55, m.DEGREES_POINT_1C, m.HeaterTemp),
++        (21, m.DEGREES_C, m.TriacTemp),
++        (0, m.DEGREES_POINT_1C, m.UnusedTemp),
++        (250, m.DEGREES_POINT_1C, m.InternalTemp),
++        (0, m.BOOLEAN, m.WaterLow),
++        (1, m.BOOLEAN, m.WaterLeak),
++        (65000, m.MOTOR_SPEED, m.MotorSpeed),
++    ],
++}
++
++
++async def main() -> None:
++    out = []
++    w = out.append
++    w("// GENERATED by tests/gen_golden.py from pyanova-nano " + version("pyanova-nano") + ". Do not edit.")
++    w("#pragma once")
++    w("#include <cstdint>")
++    w("#include <vector>")
++    w("")
++    w("namespace golden {")
++    w("")
++
++    # ---- Request frames (client -> device) ----
++    w("struct RequestCase { const char *name; uint8_t msg_type; bool has_value; int32_t value; std::vector<uint8_t> frame; };")
++    w("static const std::vector<RequestCase> REQUESTS = {")
++    reads = [
++        ("GET_SENSORS", m.GET_SENSORS),
++        ("GET_TEMP_SETPOINT", m.GET_TEMP_SETPOINT),
++        ("GET_TEMP_UNITS", m.GET_TEMP_UNITS),
++        ("GET_COOKING_TIMER", m.GET_COOKING_TIMER),
++        ("START_COOKING", m.START_COOKING),
++        ("STOP_COOKING", m.STOP_COOKING),
++        ("GET_FIRMWARE_INFO", m.GET_FIRMWARE_INFO),
++        ("GET_DEVICE_INFO", m.GET_DEVICE_INFO),
++    ]
++    for name, t in reads:
++        w(f"  {{{c_str(name)}, {t}, false, 0, {c_bytes(create_command_array(t))}}},")
++    writes = [
++        ("SET_TEMP_SETPOINT 600", m.SET_TEMP_SETPOINT, 600),
++        ("SET_TEMP_SETPOINT 1405", m.SET_TEMP_SETPOINT, 1405),
++        ("SET_TEMP_SETPOINT 0", m.SET_TEMP_SETPOINT, 0),
++        ("SET_TEMP_SETPOINT -5", m.SET_TEMP_SETPOINT, -5),
++        ("SET_COOKING_TIMER 90", m.SET_COOKING_TIMER, 90),
++        ("SET_COOKING_TIMER 0", m.SET_COOKING_TIMER, 0),
++        ("SET_COOKING_TIMER 5999", m.SET_COOKING_TIMER, 5999),
++        ("SET_TEMP_UNITS C", m.SET_TEMP_UNITS, m.DEGREES_C),
++        ("SET_TEMP_UNITS F", m.SET_TEMP_UNITS, m.DEGREES_F),
++    ]
++    for name, t, v in writes:
++        frame = create_command_array(t, m.IntegerValue(value=v))
++        w(f"  {{{c_str(name)}, {t}, true, {v}, {c_bytes(frame)}}},")
++    w("};")
++    w("")
++
++    # ---- Setpoint encoding exactly as PyAnova.set_target_temperature does it ----
++    w("struct SetpointCase { double temperature; int32_t raw; std::vector<uint8_t> frame; };")
++    w("static const std::vector<SetpointCase> SETPOINTS = {")
++    for t in (60.0, 57.5, 60.25, 60.35, 0.04, 140.5, 92.0):
++        frame = await _write_frame(lambda c, t=t: c.set_target_temperature(t))
++        w(f"  {{{t!r}, {int(round(t * 10))}, {c_bytes(frame)}}},")
++    w("};")
++    w("")
++
++    # Unit writes as PyAnova.set_unit does it (C -> DEGREES_C, anything else -> DEGREES_F).
++    w("struct UnitWriteCase { char unit; std::vector<uint8_t> frame; };")
++    w("static const std::vector<UnitWriteCase> UNIT_WRITES = {")
++    for u in ("C", "F"):
++        frame = await _write_frame(lambda c, u=u: c.set_unit(u))
++        w(f"  {{'{u}', {c_bytes(frame)}}},")
++    w("};")
++    w("")
++
++    # ---- Sensor responses decoded through PyAnova.get_sensor_values ----
++    w("struct SensorCase {")
++    w("  const char *name; std::vector<uint8_t> frame;")
++    w("  double water_temp; char water_unit; double heater_temp; char heater_unit;")
++    w("  double triac_temp; char triac_unit; double internal_temp; char internal_unit;")
++    w("  bool water_low; bool water_leak; int32_t motor_speed; bool running;")
++    w("};")
++    w("static const std::vector<SensorCase> SENSORS = {")
++    for name, entries in SENSOR_CASES.items():
++        frame, sv = await _decode_via_reference("get_sensor_values", m.GET_SENSORS, sensor_list(entries))
++        running = sv.motor_speed != 0  # PyAnova.get_status()
++        w(
++            f"  {{{c_str(name)}, {c_bytes(frame)}, {sv.water_temp!r}, '{sv.water_temp_units}', "
++            f"{sv.heater_temp!r}, '{sv.heater_temp_units}', {sv.triac_temp!r}, '{sv.triac_temp_units}', "
++            f"{sv.internal_temp!r}, '{sv.internal_temp_units}', {str(sv.water_low).lower()}, "
++            f"{str(sv.water_leak).lower()}, {sv.motor_speed}, {str(running).lower()}}},"
++        )
++    w("};")
++    w("")
++
++    # ---- Integer responses ----
++    w("struct IntCase { const char *name; uint8_t msg_type; std::vector<uint8_t> frame; int32_t raw; double scaled; char unit; };")
++    w("static const std::vector<IntCase> INTEGERS = {")
++    for raw in (600, 1405, 0):
++        frame, val = await _decode_via_reference(
++            "get_target_temperature", m.GET_TEMP_SETPOINT, m.IntegerValue(value=raw).SerializeToString()
++        )
++        w(f"  {{\"setpoint {raw}\", {m.GET_TEMP_SETPOINT}, {c_bytes(frame)}, {raw}, {val!r}, 0}},")
++    for raw in (90, 0, 5999):
++        frame, val = await _decode_via_reference(
++            "get_timer", m.GET_COOKING_TIMER, m.IntegerValue(value=raw).SerializeToString()
++        )
++        w(f"  {{\"timer {raw}\", {m.GET_COOKING_TIMER}, {c_bytes(frame)}, {raw}, {float(val)!r}, 0}},")
++    for raw in (m.DEGREES_C, m.DEGREES_F, m.DEGREES_POINT_1C, m.DEGREES_POINT_1F):
++        frame, val = await _decode_via_reference(
++            "get_unit", m.GET_TEMP_UNITS, m.IntegerValue(value=raw).SerializeToString()
++        )
++        w(f"  {{\"unit {raw}\", {m.GET_TEMP_UNITS}, {c_bytes(frame)}, {raw}, 0.0, '{val}'}},")
++    w("};")
++    w("")
++
++    # ---- Firmware info (long commit id forces a 0xFF COBS block) ----
++    w("struct FirmwareCase { const char *name; std::vector<uint8_t> frame; const char *commit_id; const char *tag_id; uint32_t date_code; };")
++    w("static const std::vector<FirmwareCase> FIRMWARE = {")
++    for name, commit, tag, date in (
++        ("short", "1a2b3c4", "v1.2.3", 20240101),
++        ("long_block", "f" * 300, "v9.9.9", 4294967295),
++    ):
++        payload = m.FirmwareInfo(commitId=commit, tagId=tag, dateCode=date).SerializeToString()
++        frame = response_frame(m.GET_FIRMWARE_INFO, payload)
++        parsed = m.FirmwareInfo.FromString(bytes(convert_buffer(bytearray(frame))))
++        assert parsed.commitId == commit and parsed.tagId == tag and parsed.dateCode == date
++        w(f"  {{{c_str(name)}, {c_bytes(frame)}, {c_str(commit)}, {c_str(tag)}, {date}u}},")
++    w("};")
++    w("")
++    w("}  // namespace golden")
++    print("\n".join(out))
++
++
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/tests/golden_vectors.h b/tests/golden_vectors.h
+new file mode 100644
+index 0000000..e73f0bd
+--- /dev/null
++++ b/tests/golden_vectors.h
+@@ -0,0 +1,78 @@
++// GENERATED by tests/gen_golden.py from pyanova-nano 0.3.5. Do not edit.
++#pragma once
++#include <cstdint>
++#include <vector>
++
++namespace golden {
++
++struct RequestCase { const char *name; uint8_t msg_type; bool has_value; int32_t value; std::vector<uint8_t> frame; };
++static const std::vector<RequestCase> REQUESTS = {
++  {"GET_SENSORS", 5, false, 0, {1, 2, 5, 0}},
++  {"GET_TEMP_SETPOINT", 4, false, 0, {1, 2, 4, 0}},
++  {"GET_TEMP_UNITS", 7, false, 0, {1, 2, 7, 0}},
++  {"GET_COOKING_TIMER", 18, false, 0, {1, 2, 18, 0}},
++  {"START_COOKING", 10, false, 0, {1, 2, 10, 0}},
++  {"STOP_COOKING", 11, false, 0, {1, 2, 11, 0}},
++  {"GET_FIRMWARE_INFO", 26, false, 0, {1, 2, 26, 0}},
++  {"GET_DEVICE_INFO", 25, false, 0, {1, 2, 25, 0}},
++  {"SET_TEMP_SETPOINT 600", 3, true, 600, {1, 5, 3, 8, 216, 4, 0}},
++  {"SET_TEMP_SETPOINT 1405", 3, true, 1405, {1, 5, 3, 8, 253, 10, 0}},
++  {"SET_TEMP_SETPOINT 0", 3, true, 0, {1, 2, 3, 0}},
++  {"SET_TEMP_SETPOINT -5", 3, true, -5, {1, 13, 3, 8, 251, 255, 255, 255, 255, 255, 255, 255, 255, 1, 0}},
++  {"SET_COOKING_TIMER 90", 16, true, 90, {1, 4, 16, 8, 90, 0}},
++  {"SET_COOKING_TIMER 0", 16, true, 0, {1, 2, 16, 0}},
++  {"SET_COOKING_TIMER 5999", 16, true, 5999, {1, 5, 16, 8, 239, 46, 0}},
++  {"SET_TEMP_UNITS C", 6, true, 6, {1, 4, 6, 8, 6, 0}},
++  {"SET_TEMP_UNITS F", 6, true, 7, {1, 4, 6, 8, 7, 0}},
++};
++
++struct SetpointCase { double temperature; int32_t raw; std::vector<uint8_t> frame; };
++static const std::vector<SetpointCase> SETPOINTS = {
++  {60.0, 600, {1, 5, 3, 8, 216, 4, 0}},
++  {57.5, 575, {1, 5, 3, 8, 191, 4, 0}},
++  {60.25, 602, {1, 5, 3, 8, 218, 4, 0}},
++  {60.35, 604, {1, 5, 3, 8, 220, 4, 0}},
++  {0.04, 0, {1, 2, 3, 0}},
++  {140.5, 1405, {1, 5, 3, 8, 253, 10, 0}},
++  {92.0, 920, {1, 5, 3, 8, 152, 7, 0}},
++};
++
++struct UnitWriteCase { char unit; std::vector<uint8_t> frame; };
++static const std::vector<UnitWriteCase> UNIT_WRITES = {
++  {'C', {1, 4, 6, 8, 6, 0}},
++  {'F', {1, 4, 6, 8, 7, 0}},
++};
++
++struct SensorCase {
++  const char *name; std::vector<uint8_t> frame;
++  double water_temp; char water_unit; double heater_temp; char heater_unit;
++  double triac_temp; char triac_unit; double internal_temp; char internal_unit;
++  bool water_low; bool water_leak; int32_t motor_speed; bool running;
++};
++static const std::vector<SensorCase> SENSORS = {
++  {"celsius_running", {1, 63, 5, 10, 5, 8, 191, 45, 16, 4, 10, 7, 8, 222, 47, 16, 4, 24, 1, 10, 7, 8, 160, 35, 16, 4, 24, 2, 10, 4, 16, 4, 24, 3, 10, 7, 8, 177, 27, 16, 4, 24, 4, 10, 4, 16, 3, 24, 5, 10, 4, 16, 3, 24, 6, 10, 7, 8, 136, 14, 16, 2, 24, 7, 0}, 58.23, 'C', 61.1, 'C', 45.12, 'C', 35.05, 'C', false, false, 1800, true},
++  {"fahrenheit_alarms_stopped", {1, 63, 5, 10, 5, 8, 253, 10, 16, 1, 10, 7, 8, 220, 11, 16, 1, 24, 1, 10, 6, 8, 99, 16, 7, 24, 2, 10, 4, 16, 1, 24, 3, 10, 7, 8, 168, 74, 16, 5, 24, 4, 10, 6, 8, 1, 16, 3, 24, 5, 10, 6, 8, 1, 16, 3, 24, 6, 10, 4, 16, 2, 24, 7, 0}, 140.5, 'F', 150.0, 'F', 99.0, 'F', 95.12, 'F', true, true, 0, false},
++  {"zero_and_negative", {1, 3, 5, 10, 59, 10, 13, 8, 201, 255, 255, 255, 255, 255, 255, 255, 255, 1, 24, 1, 10, 6, 8, 21, 16, 6, 24, 2, 10, 2, 24, 3, 10, 5, 8, 250, 1, 24, 4, 10, 4, 16, 3, 24, 5, 10, 6, 8, 1, 16, 3, 24, 6, 10, 8, 8, 232, 251, 3, 16, 2, 24, 7, 0}, 0.0, 'C', -5.5, 'C', 21.0, 'C', 25.0, 'C', false, true, 65000, true},
++};
++
++struct IntCase { const char *name; uint8_t msg_type; std::vector<uint8_t> frame; int32_t raw; double scaled; char unit; };
++static const std::vector<IntCase> INTEGERS = {
++  {"setpoint 600", 4, {1, 5, 4, 8, 216, 4, 0}, 600, 60.0, 0},
++  {"setpoint 1405", 4, {1, 5, 4, 8, 253, 10, 0}, 1405, 140.5, 0},
++  {"setpoint 0", 4, {1, 2, 4, 0}, 0, 0.0, 0},
++  {"timer 90", 18, {1, 4, 18, 8, 90, 0}, 90, 90.0, 0},
++  {"timer 0", 18, {1, 2, 18, 0}, 0, 0.0, 0},
++  {"timer 5999", 18, {1, 5, 18, 8, 239, 46, 0}, 5999, 5999.0, 0},
++  {"unit 6", 7, {1, 4, 7, 8, 6, 0}, 6, 0.0, 'C'},
++  {"unit 7", 7, {1, 4, 7, 8, 7, 0}, 7, 0.0, 'F'},
++  {"unit 0", 7, {1, 2, 7, 0}, 0, 0.0, 'C'},
++  {"unit 1", 7, {1, 4, 7, 8, 1, 0}, 1, 0.0, 'F'},
++};
++
++struct FirmwareCase { const char *name; std::vector<uint8_t> frame; const char *commit_id; const char *tag_id; uint32_t date_code; };
++static const std::vector<FirmwareCase> FIRMWARE = {
++  {"short", {1, 24, 26, 10, 7, 49, 97, 50, 98, 51, 99, 52, 18, 6, 118, 49, 46, 50, 46, 51, 24, 229, 173, 211, 9, 0}, "1a2b3c4", "v1.2.3", 20240101u},
++  {"long_block", {1, 255, 26, 10, 172, 2, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 65, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 18, 6, 118, 57, 46, 57, 46, 57, 24, 255, 255, 255, 255, 15, 0}, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "v9.9.9", 4294967295u},
++};
++
++}  // namespace golden
+diff --git a/tests/test_ble_commands.cpp b/tests/test_ble_commands.cpp
+deleted file mode 100644
+index 8955db2..0000000
+--- a/tests/test_ble_commands.cpp
++++ /dev/null
+@@ -1,128 +0,0 @@
+-#include <vector>
+-#include <cassert>
+-#include <cstdio>
+-
+-// Copy of the functions from anova_nano.cpp (for testing purposes)
+-std::vector<uint8_t> encode_command(const std::vector<uint8_t> &buffer, bool append_zero = true) {
+-    std::vector<uint8_t> result;
+-    result.push_back(0);  // Start with 0
+-    size_t last_value = 0;
+-    size_t current_index = 1;
+-    
+-    auto reset_index = [&](bool is_end) {
+-        result[last_value] = static_cast<uint8_t>(current_index);
+-        last_value = result.size();
+-        if (is_end) {
+-            result.push_back(0);
+-        }
+-        current_index = 1;
+-    };
+-    
+-    for (size_t u = 0; u < buffer.size(); ++u) {
+-        if (buffer[u] == 0) {
+-            reset_index(true);
+-        } else {
+-            result.push_back(buffer[u]);
+-            current_index++;
+-            if (current_index == 255) {
+-                reset_index(true);
+-            }
+-        }
+-    }
+-    reset_index(false);
+-    
+-    if (append_zero) {
+-        result.push_back(0);
+-    }
+-    
+-    return result;
+-}
+-
+-std::vector<uint8_t> create_command_array(uint8_t message_type, const std::vector<uint8_t> &value = {}) {
+-    // Based on pyanova-nano.commands.create_command_array
+-    std::vector<uint8_t> command = {
+-        0x03,  // ANOVA_DOMAIN_ID_CONFIG
+-        message_type             // Message type
+-    };
+-    
+-    // Add value if provided
+-    if (!value.empty()) {
+-        command.insert(command.end(), value.begin(), value.end());
+-    }
+-    
+-    return encode_command(command, true);
+-}
+-
+-void test_encode_command_empty() {
+-    std::vector<uint8_t> input = {};
+-    std::vector<uint8_t> expected = {1, 0}; // [1,0]
+-    std::vector<uint8_t> actual = encode_command(input, true);
+-    assert(actual == expected);
+-}
+-
+-void test_encode_command_simple() {
+-    std::vector<uint8_t> input = {3, 1};
+-    std::vector<uint8_t> expected = {2, 3, 1, 0}; // [2,3,1,0]
+-    std::vector<uint8_t> actual = encode_command(input, true);
+-    assert(actual == expected);
+-}
+-
+-void test_encode_command_with_zeros() {
+-    std::vector<uint8_t> input = {0, 5, 0, 10};
+-    // Let's compute step by step:
+-    // Start: [0], last_value=0, current_index=1
+-    // u0: 0 -> reset_index(true): 
+-    //   result[0] = 1 -> [1], last_value=1, current_index=1 -> result=[1,0]
+-    // u1: 5 -> append 5 -> [1,0,5], current_index=2
+-    // u2: 0 -> reset_index(true):
+-    //   result[1] = 2 -> [1,2,5], last_value=2, current_index=1 -> result=[1,2,5,0]
+-    // u3: 10 -> append 10 -> [1,2,5,0,10], current_index=2
+-    // After loop: reset_index(false):
+-    //   result[2] = 2 -> [1,2,2,0,10], last_value=3, current_index=1
+-    // Then append 0 -> [1,2,2,0,10,1,0]
+-    std::vector<uint8_t> expected = {1, 2, 2, 0, 10, 1, 0};
+-    std::vector<uint8_t> actual = encode_command(input, true);
+-    assert(actual == expected);
+-}
+-
+-void test_create_command_array_get_sensors() {
+-    // GET_SENSORS message type is 0x01 (from pyanova-nano)
+-    std::vector<uint8_t> expected = {2, 3, 1, 0}; // [2,3,1,0] as computed above
+-    std::vector<uint8_t> actual = create_command_array(0x01);
+-    assert(actual == expected);
+-}
+-
+-void test_create_command_array_with_value() {
+-    // Let's test with a simple value: [0xFF]
+-    std::vector<uint8_t> value = {0xFF};
+-    std::vector<uint8_t> command_before_encode = {0x03, 0x02, 0xFF}; // domain id, message type (0x02 for example), value
+-    // Now we need to encode [0x03, 0x02, 0xFF]
+-    // Step by step:
+-    // Start: [0], last_value=0, current_index=1
+-    // u0: 3 -> [0,3], current_index=2
+-    // u1: 2 -> [0,3,2], current_index=2
+-    // u2: 255 -> [0,3,2,255], current_index=256 -> which triggers reset_index(true) because current_index==255
+-    //   reset_index(true): 
+-    //     result[0] = 3 -> [3,3,2,255], last_value=3, current_index=1 -> result=[3,3,2,255,0]
+-    // After loop: reset_index(false):
+-    //   result[3] = 1 -> [3,3,2,1,0], last_value=4, current_index=1
+-    // Then append 0 -> [3,3,2,1,0,1,0]
+-    std::vector<uint8_t> expected = {3, 3, 2, 1, 0, 1, 0};
+-    std::vector<uint8_t> actual = create_command_array(0x02, value);
+-    assert(actual == expected);
+-}
+-
+-int main() {
+-    try {
+-        test_encode_command_empty();
+-        test_encode_command_simple();
+-        test_encode_command_with_zeros();
+-        test_create_command_array_get_sensors();
+-        test_create_command_array_with_value();
+-        printf("All tests passed!\n");
+-        return 0;
+-    } catch (const std::exception& e) {
+-        printf("Test failed: %s\n", e.what());
+-        return 1;
+-    }
+-}
+\ No newline at end of file
+diff --git a/tests/test_protocol.cpp b/tests/test_protocol.cpp
+new file mode 100644
+index 0000000..0431799
+--- /dev/null
++++ b/tests/test_protocol.cpp
+@@ -0,0 +1,177 @@
++// Host-side tests for the Anova Nano protocol port.
++// Every expected value comes from tests/golden_vectors.h, generated from pyanova-nano.
++//
++//   make -C tests   (or see tests/Makefile)
++#include <cmath>
++#include <cstdio>
++#include <string>
++
++#include "anova_nano_protocol.h"
++#include "golden_vectors.h"
++
++using namespace esphome::anova_nano::protocol;
++
++static int failures = 0;
++static int checks = 0;
++
++#define CHECK(cond, ...)                                       \
++  do {                                                         \
++    checks++;                                                  \
++    if (!(cond)) {                                             \
++      failures++;                                              \
++      std::printf("FAIL %s:%d: %s | ", __FILE__, __LINE__, #cond); \
++      std::printf(__VA_ARGS__);                                \
++      std::printf("\n");                                       \
++    }                                                          \
++  } while (0)
++
++static bool near(double a, double b) { return std::fabs(a - b) < 1e-4; }
++
++static std::string hex(const std::vector<uint8_t> &v) {
++  std::string s;
++  char b[4];
++  for (auto x : v) {
++    std::snprintf(b, sizeof b, "%02x ", x);
++    s += b;
++  }
++  return s;
++}
++
++// Decode a golden response frame, delivering it in `chunk`-byte notifications.
++static bool receive(const std::vector<uint8_t> &wire, size_t chunk, Frame &frame) {
++  FrameAssembler fa;
++  std::vector<std::vector<uint8_t>> frames;
++  for (size_t i = 0; i < wire.size(); i += chunk) {
++    size_t n = std::min(chunk, wire.size() - i);
++    fa.feed(wire.data() + i, n, frames);
++  }
++  if (frames.size() != 1 || fa.pending() != 0)
++    return false;
++  return parse_frame(frames[0].data(), frames[0].size(), frame);
++}
++
++static void test_requests() {
++  for (const auto &c : golden::REQUESTS) {
++    auto type = static_cast<MessageType>(c.msg_type);
++    auto got = c.has_value ? build_command(type, c.value) : build_command(type);
++    CHECK(got == c.frame, "%s: got %s want %s", c.name, hex(got).c_str(), hex(c.frame).c_str());
++  }
++}
++
++static void test_setpoints() {
++  for (const auto &c : golden::SETPOINTS) {
++    int32_t raw = setpoint_to_raw(c.temperature);
++    CHECK(raw == c.raw, "t=%.4f raw %d want %d", c.temperature, raw, c.raw);
++    auto got = build_command(SET_TEMP_SETPOINT, raw);
++    CHECK(got == c.frame, "t=%.4f frame %s want %s", c.temperature, hex(got).c_str(), hex(c.frame).c_str());
++  }
++  for (const auto &c : golden::UNIT_WRITES) {
++    auto got = build_command(SET_TEMP_UNITS, unit_to_raw(c.unit));
++    CHECK(got == c.frame, "unit %c frame %s", c.unit, hex(got).c_str());
++  }
++}
++
++static void test_sensors() {
++  for (size_t chunk : {size_t(1), size_t(7), size_t(20), size_t(512)}) {
++    for (const auto &c : golden::SENSORS) {
++      Frame f;
++      CHECK(receive(c.frame, chunk, f), "%s chunk=%zu: frame did not decode", c.name, chunk);
++      CHECK(f.domain == DOMAIN_CONFIG && f.message_type == GET_SENSORS, "%s: header %d/%d", c.name, f.domain,
++            f.message_type);
++      std::vector<SensorValue> list;
++      CHECK(decode_sensor_value_list(f.payload.data(), f.payload.size(), list), "%s: protobuf", c.name);
++      SensorValues sv;
++      CHECK(to_sensor_values(list, sv), "%s: to_sensor_values", c.name);
++      CHECK(near(sv.water_temp, c.water_temp) && sv.water_temp_unit == c.water_unit, "%s water %.3f%c", c.name,
++            sv.water_temp, sv.water_temp_unit);
++      CHECK(near(sv.heater_temp, c.heater_temp) && sv.heater_temp_unit == c.heater_unit, "%s heater %.3f", c.name,
++            sv.heater_temp);
++      CHECK(near(sv.triac_temp, c.triac_temp) && sv.triac_temp_unit == c.triac_unit, "%s triac %.3f", c.name,
++            sv.triac_temp);
++      CHECK(near(sv.internal_temp, c.internal_temp) && sv.internal_temp_unit == c.internal_unit, "%s internal %.3f",
++            c.name, sv.internal_temp);
++      CHECK(sv.water_low == c.water_low && sv.water_leak == c.water_leak, "%s alarms", c.name);
++      CHECK(sv.motor_speed == c.motor_speed && sv.running() == c.running, "%s motor %d", c.name, sv.motor_speed);
++    }
++  }
++}
++
++static void test_integers() {
++  for (const auto &c : golden::INTEGERS) {
++    Frame f;
++    CHECK(receive(c.frame, 20, f), "%s: frame", c.name);
++    CHECK(f.message_type == c.msg_type, "%s: type %d", c.name, f.message_type);
++    int32_t v = -1;
++    CHECK(decode_integer_value(f.payload.data(), f.payload.size(), v) && v == c.raw, "%s: raw %d", c.name, v);
++    if (c.msg_type == GET_TEMP_SETPOINT)
++      CHECK(near(setpoint_from_raw(v), c.scaled), "%s: scaled %.2f", c.name, setpoint_from_raw(v));
++    if (c.msg_type == GET_TEMP_UNITS) {
++      char u;
++      int factor;
++      CHECK(unit_and_factor(v, u, factor) && u == c.unit, "%s: unit", c.name);
++    }
++  }
++}
++
++static void test_firmware() {
++  for (const auto &c : golden::FIRMWARE) {
++    Frame f;
++    CHECK(receive(c.frame, 20, f), "%s: frame", c.name);
++    FirmwareInfo fw;
++    CHECK(decode_firmware_info(f.payload.data(), f.payload.size(), fw), "%s: protobuf", c.name);
++    CHECK(fw.commit_id == c.commit_id && fw.tag_id == c.tag_id && fw.date_code == c.date_code, "%s: fields",
++          c.name);
++  }
++}
++
++static void test_robustness() {
++  // Back-to-back frames in a single notification, then a split one.
++  const auto &a = golden::SENSORS[0].frame;
++  const auto &b = golden::INTEGERS[0].frame;
++  std::vector<uint8_t> wire(a);
++  wire.insert(wire.end(), b.begin(), b.end());
++  FrameAssembler fa;
++  std::vector<std::vector<uint8_t>> frames;
++  fa.feed(wire.data(), wire.size(), frames);
++  CHECK(frames.size() == 2, "two frames, got %zu", frames.size());
++
++  // Truncated/garbage frames must be rejected, not crash.
++  Frame f;
++  const uint8_t truncated[] = {5, 1, 2};
++  CHECK(!parse_frame(truncated, sizeof truncated, f), "truncated accepted");
++  std::vector<SensorValue> list;
++  const uint8_t bad_len[] = {0x0a, 0x7f, 0x08};
++  CHECK(!decode_sensor_value_list(bad_len, sizeof bad_len, list), "bad length accepted");
++  const uint8_t bad_varint[] = {0x08, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
++  int32_t v;
++  CHECK(!decode_integer_value(bad_varint, sizeof bad_varint, v), "overlong varint accepted");
++
++  // Short sensor list (reference would raise StopIteration) must be rejected.
++  SensorValues sv;
++  std::vector<SensorValue> seven(7);
++  CHECK(!to_sensor_values(seven, sv), "7-entry list accepted");
++
++  // Unknown unit (reference raises ValueError).
++  std::vector<SensorValue> eight(8);
++  eight[0].units = 2;  // MOTOR_SPEED is not a temperature unit
++  CHECK(!to_sensor_values(eight, sv), "unknown unit accepted");
++
++  // Overflowing assembler resyncs.
++  std::vector<uint8_t> junk(FrameAssembler::MAX_FRAME + 10, 0x42);
++  frames.clear();
++  fa.reset();
++  fa.feed(junk.data(), junk.size(), frames);
++  fa.feed(golden::INTEGERS[0].frame.data(), golden::INTEGERS[0].frame.size(), frames);
++  CHECK(frames.size() == 1, "resync after overflow");
++}
++
++int main() {
++  test_requests();
++  test_setpoints();
++  test_sensors();
++  test_integers();
++  test_firmware();
++  test_robustness();
++  std::printf("%d checks, %d failures\n", checks, failures);
++  return failures == 0 ? 0 : 1;
++}

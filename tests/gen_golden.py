@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Generate tests/golden_vectors.h from the reference pyanova-nano implementation.
+
+Every expected value in the C++ tests comes from running pyanova-nano's own code:
+- request frames:  pyanova_nano.commands.create_command_array
+- response frames: pyanova_nano.commands.encode_command (device -> client framing)
+- decoding:        pyanova_nano.commands.convert_buffer + protobuf FromString
+- sensor scaling:  PyAnova.get_sensor_values / get_target_temperature / get_unit
+- setpoint encode: PyAnova.set_target_temperature (int(round(t * 10)), banker's rounding)
+
+CI regenerates this header and fails if it differs, so the C++ port cannot drift
+from the reference without the diff showing up.
+
+Usage:  pip install "pyanova-nano==0.3.5" && python tests/gen_golden.py > tests/golden_vectors.h
+"""
+
+import asyncio
+from importlib.metadata import version
+
+from pyanova_nano import PyAnova
+from pyanova_nano.commands import convert_buffer, create_command_array, encode_command
+from pyanova_nano.proto import messages_pb2 as m
+from pyanova_nano.types import ReadCommands, WriteCommands
+
+
+def c_bytes(data) -> str:
+    return "{" + ", ".join(str(b) for b in data) + "}"
+
+
+def c_str(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def response_frame(msg_type: int, payload: bytes) -> bytes:
+    """Frame a device response the way the reference expects to receive it."""
+    frame = encode_command(bytes([m.ANOVA_DOMAIN_ID_CONFIG, msg_type]) + payload, True)
+    # Sanity: the reference decoder must recover the payload exactly.
+    assert bytes(convert_buffer(bytearray(frame))) == payload, (msg_type, payload)
+    return frame
+
+
+class _Capture:
+    """Stand-in for the BLE transport: PyAnova.send_command writes here."""
+
+    def __init__(self):
+        self.written = None
+
+    async def write_gatt_char(self, _uuid, data, response):
+        assert response is False  # reference writes without response
+        self.written = bytes(data)
+
+
+async def _write_frame(coro_factory) -> bytes:
+    """Run a PyAnova write method and capture the exact bytes it sends."""
+    client = PyAnova()
+    cap = _Capture()
+    client._client = cap
+    task = asyncio.ensure_future(coro_factory(client))
+    for _ in range(100):
+        await asyncio.sleep(0)
+        if cap.written is not None:
+            break
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
+    return cap.written
+
+
+async def _decode_via_reference(method_name: str, msg_type: int, payload: bytes):
+    """Feed a framed response through PyAnova's own receive + parse path."""
+    client = PyAnova()
+    cap = _Capture()
+    client._client = cap
+    frame = response_frame(msg_type, payload)
+
+    async def deliver():
+        while cap.written is None:
+            await asyncio.sleep(0)
+        # Deliver in 20-byte notifications like a default-MTU BLE link.
+        for i in range(0, len(frame), 20):
+            client._on_data_received(None, bytearray(frame[i : i + 20]))
+
+    feeder = asyncio.ensure_future(deliver())
+    result = await getattr(client, method_name)()
+    await feeder
+    return frame, result
+
+
+def sensor_list(entries) -> bytes:
+    sl = m.SensorValueList()
+    for value, units, stype in entries:
+        sl.values.append(m.SensorValue(value=value, units=units, sensorType=stype))
+    return sl.SerializeToString()
+
+
+SENSOR_CASES = {
+    "celsius_running": [
+        (5823, m.DEGREES_POINT_01C, m.WaterTemp),
+        (6110, m.DEGREES_POINT_01C, m.HeaterTemp),
+        (4512, m.DEGREES_POINT_01C, m.TriacTemp),
+        (0, m.DEGREES_POINT_01C, m.UnusedTemp),
+        (3505, m.DEGREES_POINT_01C, m.InternalTemp),
+        (0, m.BOOLEAN, m.WaterLow),
+        (0, m.BOOLEAN, m.WaterLeak),
+        (1800, m.MOTOR_SPEED, m.MotorSpeed),
+    ],
+    "fahrenheit_alarms_stopped": [
+        (1405, m.DEGREES_POINT_1F, m.WaterTemp),
+        (1500, m.DEGREES_POINT_1F, m.HeaterTemp),
+        (99, m.DEGREES_F, m.TriacTemp),
+        (0, m.DEGREES_POINT_1F, m.UnusedTemp),
+        (9512, m.DEGREES_POINT_01F, m.InternalTemp),
+        (1, m.BOOLEAN, m.WaterLow),
+        (1, m.BOOLEAN, m.WaterLeak),
+        (0, m.MOTOR_SPEED, m.MotorSpeed),
+    ],
+    # Water temp entry is all-default -> serialized as an empty sub-message (0a 00),
+    # plus a negative temperature (10-byte varint) to exercise sign handling.
+    "zero_and_negative": [
+        (0, m.DEGREES_POINT_1C, m.WaterTemp),
+        (-55, m.DEGREES_POINT_1C, m.HeaterTemp),
+        (21, m.DEGREES_C, m.TriacTemp),
+        (0, m.DEGREES_POINT_1C, m.UnusedTemp),
+        (250, m.DEGREES_POINT_1C, m.InternalTemp),
+        (0, m.BOOLEAN, m.WaterLow),
+        (1, m.BOOLEAN, m.WaterLeak),
+        (65000, m.MOTOR_SPEED, m.MotorSpeed),
+    ],
+}
+
+
+async def main() -> None:
+    out = []
+    w = out.append
+    w("// GENERATED by tests/gen_golden.py from pyanova-nano " + version("pyanova-nano") + ". Do not edit.")
+    w("#pragma once")
+    w("#include <cstdint>")
+    w("#include <vector>")
+    w("")
+    w("namespace golden {")
+    w("")
+
+    # ---- Request frames (client -> device) ----
+    w("struct RequestCase { const char *name; uint8_t msg_type; bool has_value; int32_t value; std::vector<uint8_t> frame; };")
+    w("static const std::vector<RequestCase> REQUESTS = {")
+    reads = [
+        ("GET_SENSORS", m.GET_SENSORS),
+        ("GET_TEMP_SETPOINT", m.GET_TEMP_SETPOINT),
+        ("GET_TEMP_UNITS", m.GET_TEMP_UNITS),
+        ("GET_COOKING_TIMER", m.GET_COOKING_TIMER),
+        ("START_COOKING", m.START_COOKING),
+        ("STOP_COOKING", m.STOP_COOKING),
+        ("GET_FIRMWARE_INFO", m.GET_FIRMWARE_INFO),
+        ("GET_DEVICE_INFO", m.GET_DEVICE_INFO),
+    ]
+    for name, t in reads:
+        w(f"  {{{c_str(name)}, {t}, false, 0, {c_bytes(create_command_array(t))}}},")
+    writes = [
+        ("SET_TEMP_SETPOINT 600", m.SET_TEMP_SETPOINT, 600),
+        ("SET_TEMP_SETPOINT 1405", m.SET_TEMP_SETPOINT, 1405),
+        ("SET_TEMP_SETPOINT 0", m.SET_TEMP_SETPOINT, 0),
+        ("SET_TEMP_SETPOINT -5", m.SET_TEMP_SETPOINT, -5),
+        ("SET_COOKING_TIMER 90", m.SET_COOKING_TIMER, 90),
+        ("SET_COOKING_TIMER 0", m.SET_COOKING_TIMER, 0),
+        ("SET_COOKING_TIMER 5999", m.SET_COOKING_TIMER, 5999),
+        ("SET_TEMP_UNITS C", m.SET_TEMP_UNITS, m.DEGREES_C),
+        ("SET_TEMP_UNITS F", m.SET_TEMP_UNITS, m.DEGREES_F),
+    ]
+    for name, t, v in writes:
+        frame = create_command_array(t, m.IntegerValue(value=v))
+        w(f"  {{{c_str(name)}, {t}, true, {v}, {c_bytes(frame)}}},")
+    w("};")
+    w("")
+
+    # ---- Setpoint encoding exactly as PyAnova.set_target_temperature does it ----
+    w("struct SetpointCase { double temperature; int32_t raw; std::vector<uint8_t> frame; };")
+    w("static const std::vector<SetpointCase> SETPOINTS = {")
+    for t in (60.0, 57.5, 60.25, 60.35, 0.04, 140.5, 92.0):
+        frame = await _write_frame(lambda c, t=t: c.set_target_temperature(t))
+        w(f"  {{{t!r}, {int(round(t * 10))}, {c_bytes(frame)}}},")
+    w("};")
+    w("")
+
+    # Unit writes as PyAnova.set_unit does it (C -> DEGREES_C, anything else -> DEGREES_F).
+    w("struct UnitWriteCase { char unit; std::vector<uint8_t> frame; };")
+    w("static const std::vector<UnitWriteCase> UNIT_WRITES = {")
+    for u in ("C", "F"):
+        frame = await _write_frame(lambda c, u=u: c.set_unit(u))
+        w(f"  {{'{u}', {c_bytes(frame)}}},")
+    w("};")
+    w("")
+
+    # ---- Sensor responses decoded through PyAnova.get_sensor_values ----
+    w("struct SensorCase {")
+    w("  const char *name; std::vector<uint8_t> frame;")
+    w("  double water_temp; char water_unit; double heater_temp; char heater_unit;")
+    w("  double triac_temp; char triac_unit; double internal_temp; char internal_unit;")
+    w("  bool water_low; bool water_leak; int32_t motor_speed; bool running;")
+    w("};")
+    w("static const std::vector<SensorCase> SENSORS = {")
+    for name, entries in SENSOR_CASES.items():
+        frame, sv = await _decode_via_reference("get_sensor_values", m.GET_SENSORS, sensor_list(entries))
+        running = sv.motor_speed != 0  # PyAnova.get_status()
+        w(
+            f"  {{{c_str(name)}, {c_bytes(frame)}, {sv.water_temp!r}, '{sv.water_temp_units}', "
+            f"{sv.heater_temp!r}, '{sv.heater_temp_units}', {sv.triac_temp!r}, '{sv.triac_temp_units}', "
+            f"{sv.internal_temp!r}, '{sv.internal_temp_units}', {str(sv.water_low).lower()}, "
+            f"{str(sv.water_leak).lower()}, {sv.motor_speed}, {str(running).lower()}}},"
+        )
+    w("};")
+    w("")
+
+    # ---- Integer responses ----
+    w("struct IntCase { const char *name; uint8_t msg_type; std::vector<uint8_t> frame; int32_t raw; double scaled; char unit; };")
+    w("static const std::vector<IntCase> INTEGERS = {")
+    for raw in (600, 1405, 0):
+        frame, val = await _decode_via_reference(
+            "get_target_temperature", m.GET_TEMP_SETPOINT, m.IntegerValue(value=raw).SerializeToString()
+        )
+        w(f"  {{\"setpoint {raw}\", {m.GET_TEMP_SETPOINT}, {c_bytes(frame)}, {raw}, {val!r}, 0}},")
+    for raw in (90, 0, 5999):
+        frame, val = await _decode_via_reference(
+            "get_timer", m.GET_COOKING_TIMER, m.IntegerValue(value=raw).SerializeToString()
+        )
+        w(f"  {{\"timer {raw}\", {m.GET_COOKING_TIMER}, {c_bytes(frame)}, {raw}, {float(val)!r}, 0}},")
+    for raw in (m.DEGREES_C, m.DEGREES_F, m.DEGREES_POINT_1C, m.DEGREES_POINT_1F):
+        frame, val = await _decode_via_reference(
+            "get_unit", m.GET_TEMP_UNITS, m.IntegerValue(value=raw).SerializeToString()
+        )
+        w(f"  {{\"unit {raw}\", {m.GET_TEMP_UNITS}, {c_bytes(frame)}, {raw}, 0.0, '{val}'}},")
+    w("};")
+    w("")
+
+    # ---- Firmware info (long commit id forces a 0xFF COBS block) ----
+    w("struct FirmwareCase { const char *name; std::vector<uint8_t> frame; const char *commit_id; const char *tag_id; uint32_t date_code; };")
+    w("static const std::vector<FirmwareCase> FIRMWARE = {")
+    for name, commit, tag, date in (
+        ("short", "1a2b3c4", "v1.2.3", 20240101),
+        ("long_block", "f" * 300, "v9.9.9", 4294967295),
+    ):
+        payload = m.FirmwareInfo(commitId=commit, tagId=tag, dateCode=date).SerializeToString()
+        frame = response_frame(m.GET_FIRMWARE_INFO, payload)
+        parsed = m.FirmwareInfo.FromString(bytes(convert_buffer(bytearray(frame))))
+        assert parsed.commitId == commit and parsed.tagId == tag and parsed.dateCode == date
+        w(f"  {{{c_str(name)}, {c_bytes(frame)}, {c_str(commit)}, {c_str(tag)}, {date}u}},")
+    w("};")
+    w("")
+    w("}  // namespace golden")
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

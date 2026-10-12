@@ -1,0 +1,92 @@
+# CI build config: same as example/anova_nano.yaml, with the local component.
+# Find your cooker's MAC with the esp32_ble_tracker logs (it advertises as "Nano")
+# or with `bluetoothctl scan on`.
+substitutions:
+  name: anova-nano
+  anova_mac: "AA:BB:CC:DD:EE:FF"
+
+esphome:
+  name: ${name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "ci"
+  password: "ci-password"
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+esp32_ble_tracker:
+
+ble_client:
+  - mac_address: ${anova_mac}
+    id: anova_ble
+
+anova_nano:
+  id: anova
+  ble_client_id: anova_ble
+  update_interval: 30s
+
+climate:
+  - platform: anova_nano
+    name: "Sous vide"
+
+sensor:
+  - platform: anova_nano
+    water_temperature:
+      name: "Water temperature"
+    target_temperature:
+      name: "Target temperature"
+    heater_temperature:
+      name: "Heater temperature"
+    triac_temperature:
+      name: "Triac temperature"
+    internal_temperature:
+      name: "Internal temperature"
+    motor_speed:
+      name: "Motor speed"
+    timer:
+      name: "Timer remaining"
+
+binary_sensor:
+  - platform: anova_nano
+    running:
+      name: "Running"
+    water_low:
+      name: "Water low"
+    water_leak:
+      name: "Water leak"
+
+text_sensor:
+  - platform: anova_nano
+    firmware_version:
+      name: "Firmware version"
+    firmware_commit:
+      name: "Firmware commit"
+    device_info:
+      name: "Device info"
+    unit:
+      name: "Reported unit"
+
+number:
+  - platform: anova_nano
+    timer:
+      name: "Cooking timer"
+
+select:
+  - platform: anova_nano
+    unit:
+      name: "Display unit"

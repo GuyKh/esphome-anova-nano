@@ -1,0 +1,30 @@
+# CI build config: hub + climate only (no sensor/number/select platforms),
+# to make sure the optional entity code compiles out cleanly.
+esphome:
+  name: anova-nano-min
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+
+esp32_ble_tracker:
+
+ble_client:
+  - mac_address: "AA:BB:CC:DD:EE:FF"
+    id: anova_ble
+
+anova_nano:
+  id: anova
+  ble_client_id: anova_ble
+
+climate:
+  - platform: anova_nano
+    name: "Sous vide"

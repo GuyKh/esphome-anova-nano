@@ -1,77 +1,10 @@
-# ESPHome
-/.esphome/
-*.esphome.yaml
-*.env
-.secrets
+# ESPHome build output
+.esphome/
+**/.esphome/
+secrets.yaml
 
-# Build artifacts
-.build/
-*.o
-*.elf
-*.bin
-*.map
+# Host test binary
+tests/test_protocol
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Python (if we add scripts later)
 __pycache__/
-*.py[cod]
-*$py.class
-*.pyo
-*.pyd
-*.egg-info/
-.env
-.venv/
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg*
-*.manifest
-*.spec
-pip-log.txt
-pip-delete-this-directory.txt
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-CTestTestfile.cmake
-DartConfiguration.tcl
-TestConfig.cmake
-Makefile
-cmake-install.cmake
-CPack*.cmake
-
-# Logs
-*.log
+*.pyc

@@ -2,28 +2,52 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  protocol-tests:
+    name: Protocol unit tests (host)
     runs-on: ubuntu-latest
-    container:
-      image: esphome/esphome-ci:2024.12.0
-      options: --user root
-
     steps:
       - uses: actions/checkout@v4
+      - name: Build and run (ASan + UBSan)
+        run: make -C tests
 
-      - name: Install dependencies
+  reference-parity:
+    name: Golden vectors match pyanova-nano
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pyanova-nano==0.3.5"
+      - name: Regenerate and diff
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends git cmake make python3-pip
-          pip3 install espomainternal==2024.12.0
+          python tests/gen_golden.py > /tmp/golden_vectors.h
+          diff -u tests/golden_vectors.h /tmp/golden_vectors.h
 
-      - name: Test compilation
-        run: |
-          mkdir -p build
-          cd build
-          esphome check ../example/anova_nano_example.yaml
+  esphome-build:
+    name: ESPHome compile (${{ matrix.config }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [build-full, build-minimal]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache ESPHome toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/esphome
+            ~/.platformio
+          key: esphome-${{ runner.os }}-${{ hashFiles('tests/*.yaml') }}
+          restore-keys: esphome-${{ runner.os }}-
+      - run: pip install esphome
+      - run: esphome compile tests/${{ matrix.config }}.yaml
